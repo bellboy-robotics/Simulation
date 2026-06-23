@@ -2,20 +2,20 @@ import time
 import json
 import os
 import webbrowser
-from Simulation.get_pos_from_recording import get_pos_from_recording
+from Simulation.ik_sim.get_pos_from_recording import get_pos_from_recording
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
 
-from Simulation.ik_pyroki import set_pyroki, solve_ik_pyroki
+from Simulation.ik_sim.ik_pyroki import set_pyroki, solve_ik_pyroki
 
 def conect_to_sim(sim_type):
     if sim_type == 'xarm':
-        import Simulation.ufactory_sim as m
+        import Simulation.ik_sim.ufactory_sim as m
         arm = m.set_xarm()
     elif sim_type == 'pybullet':
-        import Simulation.pybullet_sim as m
+        import Simulation.ik_sim.pybullet_sim as m
         arm = m.set_pybullet()
     else:
         raise ValueError(f"Unknown simulation type: {sim_type}")
@@ -129,7 +129,7 @@ function show(id) {{
 
 def get_ik(ik_type):
     if ik_type == 'pyroki':
-        import Simulation.ik_pyroki as ik_pyroki
+        import Simulation.ik_sim.ik_pyroki as ik_pyroki
         robot, robot_coll, target_link_index, solve_fn, solve_fn_batch, base_collision_checker = ik_pyroki.set_pyroki()
     else:
         raise ValueError(f"Unknown IK solver type: {ik_type}")

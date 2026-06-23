@@ -1,7 +1,7 @@
 import os
 import json
 import numpy as np
-from Simulation.script_sim import calc_ik, plot_results
+from Simulation.ik_sim.script_sim import calc_ik, plot_results
 
 RECORDINGS = [
     ('bellboy-robotics/B-br_open_door-20251130-201101-BILLIE-11',           'hilton_berlin/br_open_door'),

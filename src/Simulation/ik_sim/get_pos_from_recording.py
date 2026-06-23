@@ -1,5 +1,5 @@
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from Simulation.dataset_reader import DatasetReader
+from Simulation.ik_sim.dataset_reader import DatasetReader
 
 
 # def _estimate_pose_offset(dataset: LeRobotDataset, arm, n_samples: int = 3) -> np.ndarray:

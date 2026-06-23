@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 from dotenv import load_dotenv
-from Simulation.ufactory_sim import TCP_OFFSET
+from Simulation.ik_sim.ufactory_sim import TCP_OFFSET
 
 load_dotenv("/Users/ronit/releases/env/base/.env")
 load_dotenv("/Users/ronit/releases/env/RONIT-DEV/.env", override=True)

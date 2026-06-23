@@ -1,1 +1,6 @@
 output/
+__pycache__/
+*.pyc
+*.code-workspace
+.vscode/
+*.egg-info/
