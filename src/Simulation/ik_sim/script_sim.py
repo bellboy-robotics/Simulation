@@ -214,7 +214,7 @@ def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, repo_id,
             res_ori = np.linalg.norm(ori_diff_wrapped)
             ik_residuals.append([res_pos, res_ori])
             if res_pos > pos_th or res_ori > ori_th:
-                print(f"Frame {i}: high error (pos={res_pos:.2f}mm ori={res_ori:.2f}deg) → recovery={error_recovery}, n_rand={current_n_random_starts}")
+                # print(f"Frame {i}: high error (pos={res_pos:.2f}mm ori={res_ori:.2f}deg) → recovery={error_recovery}, n_rand={current_n_random_starts}")
                 if error_recovery == 'random_starts':
                     current_n_random_starts = min(current_n_random_starts+1, 5)
                     error_shift             = np.zeros(6)
@@ -244,22 +244,22 @@ def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, repo_id,
     expected_poses = np.array(expected_poses[:len(new_pos)])
     expected_poses[:, 3:] = np.rad2deg(expected_poses[:, 3:])  # convert expected rotation to degrees for comparison
 
-    if shifts_chosen:
-        shifts_arr = np.array(shifts_chosen)
-        non_zero_mask = np.any(shifts_arr != 0, axis=1)
-        n_non_zero = int(non_zero_mask.sum())
-        print(f"Random shift chosen: {n_non_zero}/{len(shifts_chosen)} frames "
-              f"({100*n_non_zero/len(shifts_chosen):.1f}%)")
-        if n_non_zero > 0:
-            mean_shift = np.abs(shifts_arr[non_zero_mask]).mean(axis=0)
-            print(f"Mean |shift| when non-zero (deg): {' '.join(f'j{j+1}={v:.2f}' for j, v in enumerate(mean_shift))}")
+    # if shifts_chosen:
+    #     shifts_arr = np.array(shifts_chosen)
+    #     non_zero_mask = np.any(shifts_arr != 0, axis=1)
+    #     n_non_zero = int(non_zero_mask.sum())
+    #     print(f"Random shift chosen: {n_non_zero}/{len(shifts_chosen)} frames "
+    #           f"({100*n_non_zero/len(shifts_chosen):.1f}%)")
+    #     if n_non_zero > 0:
+    #         mean_shift = np.abs(shifts_arr[non_zero_mask]).mean(axis=0)
+    #         print(f"Mean |shift| when non-zero (deg): {' '.join(f'j{j+1}={v:.2f}' for j, v in enumerate(mean_shift))}")
 
     return expected_poses, new_pos, problematic_frames
 
 '''-------------------------------------------------------------------------------------------------------'''
 if __name__ == "__main__":
     'set seed'
-    seed = 8
+    seed = 9
     print(f"[ik_pyroki] random seed: {seed}")
     np.random.seed(seed)
     ' sim parameters: '
@@ -271,7 +271,7 @@ if __name__ == "__main__":
     extra_name      = 'big_box_w_col_mash_2st' #'init_3deg' #'curr_rec'
     ik_solver       = 'pyroki'
     use_curr_joints = 'actual'     # 'rec': recorded joints as IK init | 'actual': read from sim
-    n_random_starts = -20 #-1 = dynamic
+    n_random_starts = 5 #-1 = dynamic
     error_recovery = None #'random_starts' #'shift' #None
     repo_id = 'bellboy-robotics/B-unknown-20260301-180408-BILLIE-12'
 

@@ -75,10 +75,17 @@ def solve_ik_pyroki(solve_fn, robot, target_link_index, curr_joints, target_pose
     if n_random_starts<0:
         calc_no, best_joints, best_shift  = solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift)
     else:
-        best_err, best_joints, best_shift, calc_no = solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, shifts, reg_weights)
-    
+        if not isinstance(reg_weights, list):
+            reg_weights = [reg_weights]
+        best_joints = solve_ik_multi(solve_fn, curr_joints, target_pose6, reg_weight = reg_weights[0], n_seeds = n_random_starts)
+        # best_err, best_joints, best_shift, calc_no = solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, shifts, reg_weights)
+        best_shift  = 0
+        calc_no     = 0
 
     return np.rad2deg(best_joints), np.rad2deg(best_shift), calc_no # return the best joints, best shift from current and number of calculation done
+
+
+    
 
 def solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift):
 
@@ -155,6 +162,29 @@ def solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joint
                 best_shift  = shift
 
     return best_err, best_joints, best_shift, shifts.shape[0]
+
+def solve_ik_multi(
+    solve_fn,
+    curr_joints: np.ndarray,
+    target_pose6: np.ndarray,
+    reg_weight: float = 0.01,
+    n_seeds: int = 4,
+) -> np.ndarray:
+    """
+    solve_fn:         pyroki IK solver (from set_pyroki)
+    curr_joints:      current joint angles in radians
+    target_pose6:     target pose [x_mm, y_mm, z_mm, rx_rad, ry_rad, rz_rad]
+    reg_weight:       regularization weight towards curr_joints
+    n_seeds:          number of perturbed starts solved in parallel via vmap;
+                      perturbation magnitude is controlled by MULTI_START_PERTURB in resolver.py
+    returns:          best joint angles in radians (selected by lowest FK pose error)
+    """
+    target_pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
+    cfg_init = jnp.array(curr_joints, dtype=jnp.float32)
+    return np.array(
+        solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(reg_weight, dtype=jnp.float32), n_seeds)
+    )
+
 
 def solve_ik_pyroki_old(solve_fn, robot, target_link_index, curr_joints, target_pose6,
                     reg_weights=(0.01, 0.0001), threshold_pos_mm=1.0, threshold_ori_deg=1.0):
