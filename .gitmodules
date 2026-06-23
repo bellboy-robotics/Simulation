@@ -1,0 +1,6 @@
+[submodule "pyroki"]
+	path = pyroki
+	url = https://github.com/bellboy-robotics/pyroki.git
+[submodule "billie-onboard"]
+	path = billie-onboard
+	url = https://github.com/bellboy-robotics/billie-onboard.git

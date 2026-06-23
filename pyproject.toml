@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simulation"
+version = "0.1.0"
+dependencies = [
+    "pyroki-planner",
+    "billie-utils",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv.sources]
+pyroki-planner = { path = "billie-onboard/billie/nodes/pyroki-planner", editable = true }
+billie-utils = { path = "billie-onboard/billie/billie-utils", editable = true }
