@@ -12,7 +12,7 @@ if "BILLIE_ENVDIR" in os.environ:
 os.environ["XARM_SN"]           = "XI130506F56A19"
 os.environ["XARM_TCP_OFFSET"]   = json.dumps(TCP_OFFSET)
 os.environ["ENABLE_PYROKI_GPU"] = "false"
-os.environ["ENABLE_PYROKI_SELF_COLLISION"]  = "false"
+os.environ["ENABLE_PYROKI_SELF_COLLISION"]  = "true"
 os.environ["PYROKI_TERMINATION_THRESHOLD"]  = "1e-6"
 os.environ["ENABLE_PYROKI_DEFAULT_INIT"]    = "false"
 os.environ["PYROKI_COL_WEIGHT"]             = "100.0"
@@ -56,36 +56,19 @@ def solve_ik_pyroki(solve_fn, robot, target_link_index, curr_joints, target_pose
 
     'if rand_free - chose random start in [-random_range_deg, random_range_deg]'
     'else chose random start in [-random_range_deg, -1] U [1, random_range_deg]'
-    rand_free = True
-    if rand_free:
-        max_shift = np.deg2rad(random_range_deg)
-        shifts = [np.zeros(len(curr_joints))] + (
-            [
-            np.random.uniform(-max_shift, max_shift, len(curr_joints))
-            for _ in range(n_random_starts)
-            ])
-    else:
-        shifts = [np.zeros(len(curr_joints))] + (
-            [
-            np.random.choice([-1, 1], size=len(curr_joints))
-            * (np.deg2rad(1) + np.random.uniform(0, np.deg2rad(random_range_deg), len(curr_joints)))
-            for _ in range(n_random_starts)
-            ])
-
-    if n_random_starts<0:
-        calc_no, best_joints, best_shift  = solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift)
-    else:
-        if not isinstance(reg_weights, list):
-            reg_weights = [reg_weights]
-        best_joints = solve_ik_multi(solve_fn, curr_joints, target_pose6, reg_weight = reg_weights[0], n_seeds = n_random_starts)
-        # best_err, best_joints, best_shift, calc_no = solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, shifts, reg_weights)
-        best_shift  = 0
-        calc_no     = 0
+    # if n_random_starts<0:
+    #     calc_no, best_joints, best_shift  = solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift)
+    # else:
+    if not isinstance(reg_weights, list):
+        reg_weights = [reg_weights]
+    best_joints = solve_ik_multi(solve_fn, curr_joints, target_pose6, reg_weight = reg_weights[0], n_seeds = n_random_starts)
+    # best_joints, error, best_i = best_joints
+    
+    # best_err, best_joints, best_shift, calc_no = solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, shifts, reg_weights)
+    best_shift  = 0
+    calc_no     = 0
 
     return np.rad2deg(best_joints), np.rad2deg(best_shift), calc_no # return the best joints, best shift from current and number of calculation done
-
-
-    
 
 def solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift):
 
@@ -181,9 +164,9 @@ def solve_ik_multi(
     """
     target_pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
     cfg_init = jnp.array(curr_joints, dtype=jnp.float32)
-    return np.array(
-        solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(reg_weight, dtype=jnp.float32), n_seeds)
-    )
+    best_solution = solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(reg_weight, dtype=jnp.float32), n_seeds)
+    best_joints, error, best_i, close_ind, all_sol = best_solution
+    return np.array(best_joints)
 
 
 def solve_ik_pyroki_old(solve_fn, robot, target_link_index, curr_joints, target_pose6,

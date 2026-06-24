@@ -2,7 +2,7 @@ import time
 import json
 import os
 import webbrowser
-from Simulation.ik_sim.get_pos_from_recording import get_pos_from_recording
+import Simulation.ik_sim.get_pos_from_recording as path
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -120,12 +120,13 @@ function show(id) {{
 }}
 </script></body></html>"""
 
-    out = output_path if output_path is not None else os.path.join(os.path.dirname(__file__), 'sim_results.html')
-    with open(out, 'w') as f:
-        f.write(html)
-    if output_path is None:
-        webbrowser.open(f'file://{out}')
-    print(f"Results saved to {out}")
+    'save recording if output_path is not None'
+    if output_path is not None:
+        with open(output_path, 'w') as f:
+            f.write(html)
+        print(f"Results saved to {output_path}")
+    # if output_path is None:
+    #     webbrowser.open(f'file://{out}')
 
 def get_ik(ik_type):
     if ik_type == 'pyroki':
@@ -145,19 +146,21 @@ def plot_loaded_results(arm_sim_type, extra_name):
         problematic_frames = json.load(f)
     plot_results(expected_poses, new_pos, problematic_frames, title=arm_sim_type+'_'+extra_name)
 
-def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, repo_id,
+def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, expected_poses, joint_angles,
             pos_th=1.0, ori_th=3.0, error_recovery='random_starts'):
     # error_recovery: 'random_starts' → set n_random_starts=1 on next frame
     #                 'shift'         → add random 2-3 deg shift to curr_joints_red on next frame
     """
     """
-    'connect to IK solver (must run first — generates /tmp/urdf/XI130506F56A19-with-tcp.urdf used by pybullet)'
-    solve_fn, base_collision_checker, ik_robot, ik_target_link_index = get_ik('pyroki')
+    ' get ik solver and arm simulation'
+    if ik_solver == 'pyroki':
+        'connect to IK solver (must run first — generates /tmp/urdf/XI130506F56A19-with-tcp.urdf used by pybullet)'
+        solve_fn, base_collision_checker, ik_robot, ik_target_link_index = get_ik('pyroki')
+    else:
+        raise ValueError(f"Unknown IK solver: {ik_solver}")
     'connect to arm simulation'
     sim, arm = conect_to_sim(arm_sim_type)
 
-    'get expected poses from dataset'
-    expected_poses, joint_angles = get_pos_from_recording(repo_id)
     new_pos             = []
     new_joints          = []
     xarm_response       = []
@@ -256,12 +259,58 @@ def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, repo_id,
 
     return expected_poses, new_pos, problematic_frames
 
+def test_transformation(repo_id, no_transforms, arm_sim_type='xarm', ik_solver='pyroki',
+                        use_curr_joints='actual', n_random_starts=5, error_recovery=None,
+                        xy_range_mm=100, angle_range_deg=15, select_transform=None):
+    """ read recordings according to repo_id and create no_transorms transformations and run calc_ik per transformation
+        repo_id:          location of the recording in hf
+        no_trasforms:     number of trasformation to randomly create - if 0 - use original path
+        select_transform: 0-based index of a single transformation to run (None = run all)
+    """
+    'get expected poses from dataset'
+    expected_poses, joint_angles = path.get_pos_from_recording(repo_id)
+
+    if no_transforms == 0:
+        dxs     = [0]
+        dys     = [0]
+        dthetas = [0]
+        poses   = [expected_poses]
+    else:
+        if select_transform is not None:
+            dxs, dys, dthetas = select_transform
+            dxs = [dxs]
+            dys = [dys]
+            dthetas = [dthetas]
+        else:
+            dxs, dys, dthetas = path.get_random_diff(xy_range_mm=xy_range_mm,
+                                                    angle_range_deg=angle_range_deg,
+                                                    no_transform=no_transforms)
+        poses = [path.apply_base_transform(expected_poses, dx, dy, dtheta)
+                 for dx, dy, dtheta in zip(dxs, dys, dthetas)]
+
+    items = list(zip(poses, dxs, dys, dthetas))
+
+
+    results = []
+    for i, (pose_set, dx, dy, dtheta) in enumerate(items):
+        # print(f"\n--- Transform {i+1}/{len(poses)} ---")
+        exp_out, new_pos, problematic_frames = calc_ik(
+            arm_sim_type, ik_solver, use_curr_joints, n_random_starts,
+            pose_set, joint_angles, error_recovery=error_recovery
+        )
+        results.append((exp_out, new_pos, problematic_frames, dx, dy, dtheta))
+        diff = new_pos - exp_out
+        print(f"-transform({dx},{dy},{dtheta}):  pos error: {np.linalg.norm(diff[:, :3], axis=1).mean():.2f}mm  "
+              f"ori error: {np.linalg.norm(diff[:, 3:], axis=1).mean():.2f}deg  "
+              f"problematic frames: {len(problematic_frames)}")
+
+    return results
+
 '''-------------------------------------------------------------------------------------------------------'''
 if __name__ == "__main__":
-    'set seed'
-    seed = 9
-    print(f"[ik_pyroki] random seed: {seed}")
-    np.random.seed(seed)
+
+    np.random.seed(42)
+
     ' sim parameters: '
     load_results    = False
     # arm_sim_type    = 'xarm'
@@ -271,30 +320,47 @@ if __name__ == "__main__":
     extra_name      = 'big_box_w_col_mash_2st' #'init_3deg' #'curr_rec'
     ik_solver       = 'pyroki'
     use_curr_joints = 'actual'     # 'rec': recorded joints as IK init | 'actual': read from sim
-    n_random_starts = 5 #-1 = dynamic
+    n_random_starts = 16 #-1 = dynamic
     error_recovery = None #'random_starts' #'shift' #None
     repo_id = 'bellboy-robotics/B-unknown-20260301-180408-BILLIE-12'
+    no_transforms   = 1000
+    select_transform = None #(39.46339367881464,-115.06435572868953,-8.018289402378498)  # 0-based index to run a single transform; None = run all
 
     if load_results:
         plot_loaded_results(arm_sim_type, extra_name)
         exit()
 
     'run inverce kinematics'
-    expected_poses, new_pos, problematic_frames = calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, repo_id, error_recovery=error_recovery)
 
-    'save results and plot'
-    if extra_name is None:
-        extra_name = ''
-    output_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'output', arm_sim_type+'_'+extra_name)
-    os.makedirs(output_dir, exist_ok=True)
-    np.save(os.path.join(output_dir, 'sim_expected_poses.npy'), expected_poses)
-    np.save(os.path.join(output_dir, 'sim_new_pos.npy'), new_pos)
-    with open(os.path.join(output_dir, 'sim_problematic_frames.json'), 'w') as f:
-        json.dump([{str(k): str(v) for k, v in frame.items()} for frame in problematic_frames], f, indent=2)
-    print(f"Saved results to {output_dir}")
+    results = test_transformation(repo_id, no_transforms=no_transforms, arm_sim_type=arm_sim_type, ik_solver=ik_solver,
+                                  use_curr_joints=use_curr_joints, n_random_starts=n_random_starts,
+                                  error_recovery=error_recovery, select_transform=select_transform)
 
-    diff = new_pos - expected_poses
-    print(f"Mean error per axis (mm): X={np.mean(diff[:, 0]):.2f}±{np.std(diff[:, 0]):.2f}  Y={np.mean(diff[:, 1]):.2f}±{np.std(diff[:, 1]):.2f}  Z={np.mean(diff[:, 2]):.2f}±{np.std(diff[:, 2]):.2f}")
-    print(f"Mean error per angle:     rx={np.mean(diff[:, 3]):.2f}±{np.std(diff[:, 3]):.2f}  ry={np.mean(diff[:, 4]):.2f}±{np.std(diff[:, 4]):.2f}  rz={np.mean(diff[:, 5]):.2f}±{np.std(diff[:, 5]):.2f}")
-    plot_results(expected_poses, new_pos, problematic_frames,
-                 title=f"{arm_sim_type} | ik={ik_solver} | joints={use_curr_joints}")
+    # plot_idx = 0 #if select_transform is not None else 3
+    # expected_poses, new_pos, problematic_frames, dx, dy, dtheta = results[plot_idx]
+    # out_path = os.path.join(os.path.dirname(__file__), 'sim_results.html')
+    # the_title = f'transform dx={dx:.1f} dy={dy:.1f} dθ={dtheta:.1f}'
+
+    # plot_results(expected_poses, new_pos, problematic_frames,
+    #              title=the_title,
+    #              output_path=out_path)
+    # webbrowser.open(f'file://{out_path}')
+
+    # for res in results:
+    #     expected_poses, new_pos, problematic_frames, dx, dy, dtheta = res
+    #     'save results and plot'
+    #     if extra_name is None:
+    #         extra_name = ''
+    #     output_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'output', arm_sim_type+'_'+extra_name)
+    #     os.makedirs(output_dir, exist_ok=True)
+    #     np.save(os.path.join(output_dir, 'sim_expected_poses.npy'), expected_poses)
+    #     np.save(os.path.join(output_dir, 'sim_new_pos.npy'), new_pos)
+    #     with open(os.path.join(output_dir, 'sim_problematic_frames.json'), 'w') as f:
+    #         json.dump([{str(k): str(v) for k, v in frame.items()} for frame in problematic_frames], f, indent=2)
+    #     print(f"Saved results to {output_dir}")
+
+    #     diff = new_pos - expected_poses
+    #     print(f"Mean error per axis (mm): X={np.mean(diff[:, 0]):.2f}±{np.std(diff[:, 0]):.2f}  Y={np.mean(diff[:, 1]):.2f}±{np.std(diff[:, 1]):.2f}  Z={np.mean(diff[:, 2]):.2f}±{np.std(diff[:, 2]):.2f}")
+    #     print(f"Mean error per angle:     rx={np.mean(diff[:, 3]):.2f}±{np.std(diff[:, 3]):.2f}  ry={np.mean(diff[:, 4]):.2f}±{np.std(diff[:, 4]):.2f}  rz={np.mean(diff[:, 5]):.2f}±{np.std(diff[:, 5]):.2f}")
+    #     plot_results(expected_poses, new_pos, problematic_frames,
+    #                 title=f"{arm_sim_type} | ik={ik_solver} | joints={use_curr_joints} | tranform={}")

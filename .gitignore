@@ -4,3 +4,4 @@ __pycache__/
 *.code-workspace
 .vscode/
 *.egg-info/
+*.log
