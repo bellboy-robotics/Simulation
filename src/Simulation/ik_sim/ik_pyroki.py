@@ -11,26 +11,56 @@ if "BILLIE_ENVDIR" in os.environ:
 # Required env vars
 os.environ["XARM_SN"]           = "XI130506F56A19"
 os.environ["XARM_TCP_OFFSET"]   = json.dumps(TCP_OFFSET)
-os.environ["ENABLE_PYROKI_GPU"] = "false"
+os.environ["ENABLE_PYROKI_GPU"] = "true"
 os.environ["ENABLE_PYROKI_SELF_COLLISION"]  = "true"
 os.environ["PYROKI_TERMINATION_THRESHOLD"]  = "1e-6"
 os.environ["ENABLE_PYROKI_DEFAULT_INIT"]    = "false"
 os.environ["PYROKI_COL_WEIGHT"]             = "100.0"
-os.environ["PYROKI_COL_MARGIN"]             = "0.01" #"0.01"
+os.environ["PYROKI_COL_MARGIN"]             = "0.01" #"0.01" #  
 os.environ["PYROKI_REG_WEIGHT"]             = "0.000001"
 
 from scipy.spatial.transform import Rotation
 import jax.numpy as jnp
 
-
 from pyroki_planner.resolver import _build_solver
 from billie_utils.matrix import xarm_pose_to_pose7
 
+IGNORE_COLLISION_PAIRS: tuple[tuple[str, str], ...] = (
+    ("link_gripper_and_camera", "link5"),
+)
 
 def set_pyroki():
-    robot, robot_coll, target_link_index, solve_fn, solve_fn_batch, base_collision_checker, _ = _build_solver()
+    robot, robot_coll, target_link_index, solve_fn, solve_fn_batch, base_collision_checker, _ = _build_solver(
+        user_ignore_pairs=IGNORE_COLLISION_PAIRS
+    )
     return robot, robot_coll, target_link_index, solve_fn, solve_fn_batch, base_collision_checker
 # ^ this blocks for ~20-30 seconds on first run (JAX JIT compilation)
+
+def check_self_collision_pyroki(robot, robot_coll, joints_rad: np.ndarray):
+    """
+    Check pyroki self-collision for a single joint configuration.
+
+    joints_rad: joint angles in radians, shape (num_joints,)
+
+    Returns (is_collision, colliding_pairs) where colliding_pairs is a list of
+    (link_name_a, link_name_b, penetration_depth) tuples for penetrating pairs.
+    """
+    cfg = jnp.array(joints_rad, dtype=jnp.float32)
+    distances = np.array(robot_coll.compute_self_collision_distance(robot, cfg))  # (num_active_pairs,)
+    min_distance = distances.min()
+    if min_distance < 0.001:
+        print('proximity alert')
+    colliding_mask = distances < 0
+    if not np.any(colliding_mask):
+        return False, [], min_distance
+    colliding_pairs = [
+        (robot_coll.link_names[int(i)], robot_coll.link_names[int(j)], float(-d))
+        for i, j, d, is_col in zip(
+            robot_coll.active_idx_i, robot_coll.active_idx_j, distances, colliding_mask
+        )
+        if is_col
+    ]
+    return True, colliding_pairs, min_distance
 
 def solve_ik_pyroki(solve_fn, robot, target_link_index, curr_joints, target_pose6,
                     reg_weights=(0.01, 0.0001), threshold_pos_mm=1.0, threshold_ori_deg=1.0,
@@ -70,82 +100,6 @@ def solve_ik_pyroki(solve_fn, robot, target_link_index, curr_joints, target_pose
 
     return np.rad2deg(best_joints), np.rad2deg(best_shift), calc_no # return the best joints, best shift from current and number of calculation done
 
-def solve_ik_flex(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, n_random_starts, reg_weights, max_shift):
-
-    max_shift = 0
-    temp_max_shift = 1*np.pi/180 # 1[deg] in [rad]
-
-    target_pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
-    target_pos_m = np.array(target_pose7[4:])                    # [x, y, z] meters
-    target_rotvec_deg = np.rad2deg(target_pose6[3:])             # [rx, ry, rz] degrees
-
-    best_joints = None
-    best_shift  = None
-    best_err    = float('inf')
-
-    max_starts = -1* n_random_starts
-    'look for the best start for max max_starts times - if we find a start with good results we stop - return the best result and the number of tries we used'
-    found = False
-    for start_ind in range(max_starts):
-        shift = np.random.uniform(-max_shift-start_ind*temp_max_shift, max_shift+start_ind*temp_max_shift, len(curr_joints))
-        cfg_init = jnp.array(np.array(curr_joints) + shift, dtype=jnp.float32)
-        for w in reg_weights:
-            joints_rad = np.array(solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(w, dtype=jnp.float32)))
-
-            fk = np.array(robot.forward_kinematics(jnp.array(joints_rad, dtype=jnp.float32)))
-            fk_wxyz_xyz = fk[target_link_index]                  # [qw, qx, qy, qz, x, y, z]
-            fk_pos_m = fk_wxyz_xyz[4:]
-            fk_rotvec_deg = np.rad2deg(
-                Rotation.from_quat([fk_wxyz_xyz[1], fk_wxyz_xyz[2], fk_wxyz_xyz[3], fk_wxyz_xyz[0]]).as_rotvec()
-            )
-
-            err_pos = np.abs(fk_pos_m - target_pos_m) * 1000.0  # mm, per dim
-            err_ori = np.abs(fk_rotvec_deg - target_rotvec_deg)  # deg, per dim
-
-            score = float(np.max(err_pos / threshold_pos_mm) + np.max(err_ori / threshold_ori_deg))
-            if score < best_err:
-                best_err    = score
-                best_joints = joints_rad
-                best_shift  = shift
-            if best_err < 0.1:
-                found = True
-                break
-        if found:
-            break
-    return start_ind, best_joints, best_shift                  
-
-def solve_ik_shifts(solve_fn, robot, target_pose6, target_link_index, curr_joints, threshold_pos_mm, threshold_ori_deg, shifts, reg_weights):
-    target_pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
-    target_pos_m = np.array(target_pose7[4:])                    # [x, y, z] meters
-    target_rotvec_deg = np.rad2deg(target_pose6[3:])             # [rx, ry, rz] degrees
-
-    best_joints = None
-    best_shift  = shifts[0]
-    best_err    = float('inf')
-
-    for shift in shifts:
-        cfg_init = jnp.array(np.array(curr_joints) + shift, dtype=jnp.float32)
-        for w in reg_weights:
-            joints_rad = np.array(solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(w, dtype=jnp.float32)))
-
-            fk = np.array(robot.forward_kinematics(jnp.array(joints_rad, dtype=jnp.float32)))
-            fk_wxyz_xyz = fk[target_link_index]                  # [qw, qx, qy, qz, x, y, z]
-            fk_pos_m = fk_wxyz_xyz[4:]
-            fk_rotvec_deg = np.rad2deg(
-                Rotation.from_quat([fk_wxyz_xyz[1], fk_wxyz_xyz[2], fk_wxyz_xyz[3], fk_wxyz_xyz[0]]).as_rotvec()
-            )
-
-            err_pos = np.abs(fk_pos_m - target_pos_m) * 1000.0  # mm, per dim
-            err_ori = np.abs(fk_rotvec_deg - target_rotvec_deg)  # deg, per dim
-
-            score = float(np.max(err_pos / threshold_pos_mm) + np.max(err_ori / threshold_ori_deg))
-            if score < best_err:
-                best_err    = score
-                best_joints = joints_rad
-                best_shift  = shift
-
-    return best_err, best_joints, best_shift, shifts.shape[0]
-
 def solve_ik_multi(
     solve_fn,
     curr_joints: np.ndarray,
@@ -165,54 +119,46 @@ def solve_ik_multi(
     target_pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
     cfg_init = jnp.array(curr_joints, dtype=jnp.float32)
     best_solution = solve_fn(cfg_init, target_pose7, cfg_init, jnp.array(reg_weight, dtype=jnp.float32), n_seeds)
+    if n_seeds <= 1:
+        return np.array(best_solution)
     best_joints, error, best_i, close_ind, all_sol = best_solution
     return np.array(best_joints)
 
-
-def solve_ik_pyroki_old(solve_fn, robot, target_link_index, curr_joints, target_pose6,
-                    reg_weights=(0.01, 0.0001), threshold_pos_mm=1.0, threshold_ori_deg=1.0):
+def solve_ik_batch_multi(
+    solve_batch_fn,
+    chunk_size: int,
+    batch_size: int,
+    target_pose6: np.ndarray,
+    target_joints: np.ndarray,
+    reg_weight: float = 0.01,
+    n_seeds: int = 4,
+) -> np.ndarray:
     """
-    solve_fn:           pyroki IK solver function
-    robot:              pyroki robot (used for FK to evaluate solution quality)
-    target_link_index:  index of the TCP link in the robot
-    curr_joints:        current joint angles in radians (length 6)
-    target_pose6:       target pose [x_mm, y_mm, z_mm, rx_rad, ry_rad, rz_rad]
-    reg_weights:        regularization weights tried in order; length defines max attempts
-    threshold_pos_mm:   exit early if per-dimension position error is below this (mm)
-    threshold_ori_deg:  exit early if per-dimension orientation error is below this (deg)
-    returns:            joint angles in degrees
+    solve_fn:         pyroki IK solver (from set_pyroki)
+    curr_joints:      current joint angles in radians
+    target_pose6:     target pose [x_mm, y_mm, z_mm, rx_rad, ry_rad, rz_rad]
+    reg_weight:       regularization weight towards curr_joints
+    n_seeds:          number of perturbed starts solved in parallel via vmap;
+                      perturbation magnitude is controlled by MULTI_START_PERTURB in resolver.py
+    returns:          best joint angles in radians (selected by lowest FK pose error)
     """
-    pose7 = jnp.array(xarm_pose_to_pose7(target_pose6), dtype=jnp.float32)
-    cfg_init = jnp.array(curr_joints, dtype=jnp.float32)
-    target_pos_m = np.array(pose7[4:])                           # [x, y, z] meters
-    target_rotvec_deg = np.rad2deg(target_pose6[3:])             # [rx, ry, rz] degrees
+    cfg_init        = np.deg2rad(target_joints[0]).astype(np.float32)
+    target_poses7   = np.array([xarm_pose_to_pose7(p) for p in target_pose6], dtype=np.float32)
+    reg_refs        = np.deg2rad(target_pose6).astype(np.float32)
+    reg_weight      = np.float32(reg_weight)
 
-    best_joints = None
-    best_err = float('inf')
+    if chunk_size < batch_size:
+        pad             = batch_size - chunk_size
+        target_poses7   = np.concatenate([target_poses7,    np.tile(target_poses7[-1:],   (pad, 1))], axis=0)
+        reg_refs        = np.concatenate([reg_refs,  np.tile(reg_refs[-1:], (pad, 1))], axis=0)
 
-    if isinstance(reg_weights, (int, float)):
-        reg_weights = [reg_weights]
+    cfg_sol_batch = np.array(
+        solve_batch_fn(cfg_init, target_poses7, reg_refs, reg_weight, n_seeds)
+    )[:chunk_size]  # (chunk, num_joints) radians
 
-    for w in reg_weights:
-        joints_rad = np.array(solve_fn(cfg_init, pose7, cfg_init, jnp.array(w, dtype=jnp.float32)))
+    return np.array(cfg_sol_batch)
 
-        fk = np.array(robot.forward_kinematics(jnp.array(joints_rad, dtype=jnp.float32)))
-        fk_wxyz_xyz = fk[target_link_index]                      # [qw, qx, qy, qz, x, y, z]
-        fk_pos_m = fk_wxyz_xyz[4:]
-        fk_rotvec_deg = np.rad2deg(
-            Rotation.from_quat([fk_wxyz_xyz[1], fk_wxyz_xyz[2], fk_wxyz_xyz[3], fk_wxyz_xyz[0]]).as_rotvec()
-        )
 
-        err_pos = np.abs(fk_pos_m - target_pos_m) * 1000.0      # mm, per dim
-        err_ori = np.abs(fk_rotvec_deg - target_rotvec_deg)      # deg, per dim
-
-        # combined score: max position error weighted by thresholds
-        score = float(np.max(err_pos / threshold_pos_mm) + np.max(err_ori / threshold_ori_deg))
-        if score < best_err:
-            best_err = score
-            best_joints = joints_rad
-
-    return np.rad2deg(best_joints)
 
 
 
