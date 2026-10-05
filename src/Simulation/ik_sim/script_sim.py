@@ -148,7 +148,7 @@ def plot_loaded_results(arm_sim_type, extra_name):
         problematic_frames = json.load(f)
     plot_results(expected_poses, new_pos, problematic_frames, title=arm_sim_type+'_'+extra_name)
 
-def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, expected_poses, joint_angles):
+def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, expected_poses, joint_angles, gui=False):
     """
     """
     ' get ik solver and arm simulation'
@@ -158,7 +158,7 @@ def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, expected_
     else:
         raise ValueError(f"Unknown IK solver: {ik_solver}")
     'connect to arm simulation'
-    sim, arm = conect_to_sim(arm_sim_type)
+    sim, arm = conect_to_sim(arm_sim_type, gui=gui)
 
     new_pos             = []
     new_joints          = []
@@ -221,7 +221,7 @@ def calc_ik(arm_sim_type, ik_solver, use_curr_joints, n_random_starts, expected_
 
 def test_transformation(repo_id, no_transforms, arm_sim_type='xarm', ik_solver='pyroki',
                         use_curr_joints='actual', n_random_starts=5, 
-                        xy_range_mm=100, angle_range_deg=15, select_transform=None):
+                        xy_range_mm=100, angle_range_deg=15, select_transform=None, gui=False):
     """ read recordings according to repo_id and create no_transorms transformations and run calc_ik per transformation
         repo_id:          location of the recording in hf
         no_trasforms:     number of trasformation to randomly create - if 0 - use original path
@@ -256,7 +256,7 @@ def test_transformation(repo_id, no_transforms, arm_sim_type='xarm', ik_solver='
         # print(f"\n--- Transform {i+1}/{len(poses)} ---")
         exp_out, new_pos, problematic_frames = calc_ik(
             arm_sim_type, ik_solver, use_curr_joints, n_random_starts,
-            pose_set, joint_angles
+            pose_set, joint_angles, gui=gui
         )
         results.append((exp_out, new_pos, problematic_frames, dx, dy, dtheta))
         diff = new_pos - exp_out
@@ -293,7 +293,7 @@ if __name__ == "__main__":
 
     results = test_transformation(repo_id, no_transforms=no_transforms, arm_sim_type=arm_sim_type, ik_solver=ik_solver,
                                   use_curr_joints=use_curr_joints, n_random_starts=n_random_starts,
-                                  select_transform=select_transform)
+                                  select_transform=select_transform, gui=True)
 
     plot_idx = 0 #if select_transform is not None else 3
     expected_poses, new_pos, problematic_frames, dx, dy, dtheta = results[plot_idx]

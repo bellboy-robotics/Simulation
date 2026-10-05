@@ -1,0 +1,14 @@
+{
+  "name": "Post across the coffee-drawer path",
+  "start_joints_deg": [-15.4, 4.3, -61.6, 78.3, 100.1, 45.3],
+  "objects": [
+    {"name": "post", "role": "avoid", "type": "capsule", "start_mm": [460, 320, 150], "end_mm": [460, 320, 650], "radius_mm": 40},
+    {"name": "drawer top", "role": "eef_touch", "type": "table", "center_xy_mm": [350, 0], "top_height_mm": 470, "size_mm": [300, 300, 20]}
+  ],
+  "commands": [
+    {"cmd": "joints", "joints": [23.9, 4.2, -61.8, 109.0, 64.4, 45.5]},
+    {"cmd": "pose", "pose": [452.0, 184.3, 358.8, -1.4, 1.1, 1.0]},
+    {"cmd": "replay_policy", "repo_id": "bellboy-robotics/B-coffee-drawer-br-20260115-084428-BILLIE-12", "speed": 1.0, "transform": "poses"},
+    {"cmd": "replay_policy", "repo_id": "bellboy-robotics/B-coffee-drawer-br-20260115-084428-BILLIE-12", "speed": 1.0, "transform": "joints"}
+  ]
+}
