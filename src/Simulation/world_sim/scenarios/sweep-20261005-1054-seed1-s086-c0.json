@@ -1,0 +1,124 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    512,
+    125,
+    629
+   ],
+   "radius_mm": 79,
+   "name": "random sphere 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    273,
+    -309,
+    0
+   ],
+   "end_mm": [
+    273,
+    -309,
+    1185
+   ],
+   "radius_mm": 38,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    163,
+    -492,
+    932
+   ],
+   "radius_mm": 61,
+   "name": "random sphere 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s086 cmd 0 joints: end_state_invalid, goal_invalid",
+ "start_joints_deg": [
+  47.1,
+  11.8,
+  -130.5,
+  -163.1,
+  90.1,
+  -155.7
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -82.4,
+    -115.7,
+    -13.1,
+    -28.9,
+    113.1,
+    -91.0
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "end_state_invalid",
+   "goal_invalid"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -82.4,
+   -115.7,
+   -13.1,
+   -28.9,
+   113.1,
+   -91.0
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [
+   "self_collision"
+  ],
+  "end_broken": [
+   "self_collision"
+  ],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -82.4,
+   -115.7,
+   -13.1,
+   -28.9,
+   113.1,
+   -91.0
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s086",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

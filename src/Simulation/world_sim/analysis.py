@@ -1,7 +1,7 @@
 """Reads a plan step's results and measures the arm's path against the world objects (NumPy only)."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from billie_utils.world_collision_check_poc import (
@@ -11,6 +11,8 @@ from billie_utils.world_collision_check_poc import (
     sample_joint_path,
 )
 from scipy.spatial.transform import Rotation
+
+from Simulation.world_sim.mesh_check import link_mesh_distances, mount_differences
 
 # Links that count as the end effector for "eef_touch" objects (the gripper/camera body and the TCP).
 EEF_LINKS = ("link_gripper_and_camera", "link_tcp")
@@ -35,6 +37,11 @@ class Run:
     commands: list[dict]  # per command: spec, ok, error, seconds
     timings: list[dict]  # per planner call: call, command, n (poses), seconds; build_* entries first
     machine: dict  # where the plan step ran: host, jax_devices, planner_code
+    # The same commands planned without the avoid objects (plan.run_without_obstacles), or None.
+    no_obstacles: dict | None = None
+    # The planner's build and what it logged / compiled during the run (plan.run_scenario keys "started_at",
+    # "planner_build", "planner_log", "planner_log_dropped", "planner_messages", "planner_compile"); {} for older results.
+    planner: dict = field(default_factory=dict)
 
 
 def load_run(path: str) -> Run:
@@ -66,6 +73,9 @@ def load_run(path: str) -> Run:
         commands=data["commands"],
         timings=data.get("timings", []),
         machine=data.get("machine", {}),
+        no_obstacles=data.get("no_obstacles"),
+        planner={k: data[k] for k in ("started_at", "planner_build", "planner_log", "planner_log_dropped",
+                                      "planner_messages", "planner_compile") if k in data},  # fmt: skip
     )
 
 
@@ -114,6 +124,34 @@ def link_distances(run: Run, joints_deg: np.ndarray, role: str) -> np.ndarray:
         chunk = np.deg2rad(joints_deg[begin : begin + 2000])
         dist[begin : begin + 2000] = link_obstacle_distances(run.model, chunk, starts, ends, radii).min(axis=2)
     return np.where(run.model.movable_links[None, :], dist, np.inf)
+
+
+def mesh_distances(run: Run, joints_deg: np.ndarray, role: str) -> np.ndarray:
+    """Distance from every link's real collision mesh (this machine's URDF) to the nearest object of a role.
+
+    The meshes are posed with the run model's arm frames (see mesh_check), so a robot run keeps its
+    calibration even when its planner modelled the gripper as a box.
+
+    run: The run (arm model and objects).
+    joints_deg: (S, 6) configurations in degrees.
+    role: "avoid" or "eef_touch".
+    Returns: (S, L) meters over run.model.link_names, negative inside; +inf for links without a mesh or
+        when there are no objects; values >= mesh_check.EXACT_WITHIN_M are lower bounds.
+    """
+    return link_mesh_distances(run.model, joints_deg, *capsules(run, role))
+
+
+def planner_gripper_box(run: Run) -> bool:
+    """Whether the run's planner modelled the gripper as its bounding box (gripper mesh missing there).
+
+    run: The run; its machine["gripper_geometry"] decides when present, else the model's gripper mount
+        is compared with the URDF's mesh mount (the box fallback mounts it elsewhere).
+    Returns: True for the box fallback.
+    """
+    geometry = run.machine.get("gripper_geometry")
+    if geometry is not None:
+        return "box" in str(geometry).lower()
+    return EEF_LINKS[0] in mount_differences(run.model)
 
 
 def tcp_poses(run: Run, joints_deg: np.ndarray) -> np.ndarray:

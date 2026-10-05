@@ -1,0 +1,98 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -104,
+    -450
+   ],
+   "top_height_mm": 889,
+   "size_mm": [
+    465,
+    286,
+    47
+   ],
+   "yaw_deg": 7,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s048 cmd 1 pose: slow_single_move",
+ "start_joints_deg": [
+  -123.843,
+  -88.65,
+  -27.212,
+  -132.541,
+  -14.871,
+  135.097
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    408.2,
+    -63.0,
+    336.2,
+    -0.0034,
+    1.8346,
+    -0.2506
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "slow_single_move"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 3.9489502906799316,
+   "max_batch_s": null,
+   "before_motion_s": 3.8513107299804688,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -34.6,
+   -56.5,
+   -4.2,
+   -62.2,
+   -27.2,
+   -137.5
+  ],
+  "pose_error_mm_deg": [
+   0.44997897167997913,
+   0.14005518969149364
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -33.23173557646886,
+   -56.465518793048496,
+   -3.512725309002538,
+   -58.3126853974705,
+   -26.519599396070603,
+   218.94313452410609
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s048",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

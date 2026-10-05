@@ -1,0 +1,153 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path capsule",
+   "role": "avoid",
+   "type": "capsule",
+   "start_mm": [
+    -340,
+    -53,
+    -440
+   ],
+   "end_mm": [
+    -340,
+    -53,
+    383
+   ],
+   "radius_mm": 57
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    297,
+    390,
+    0
+   ],
+   "end_mm": [
+    297,
+    390,
+    984
+   ],
+   "radius_mm": 55,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s060 cmd 3 pose: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  -0.8,
+  53.4,
+  -137.2,
+  90.4,
+  84.1,
+  31.7
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -478.3,
+    360.2,
+    74.4,
+    -1.1751,
+    2.507,
+    0.1394
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: no detour found around the obstacle (link5 would still go 68mm in).",
+  "timing": {
+   "planner_s": 11.721745729446411,
+   "max_batch_s": null,
+   "before_motion_s": 11.646721363067627,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   151.9,
+   38.2,
+   -100.7,
+   -20.7,
+   71.9,
+   -69.5
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -0.8,
+    53.4,
+    -137.2,
+    90.4,
+    84.1,
+    31.7
+   ],
+   [
+    9.2,
+    44.13,
+    -140.46,
+    100.14,
+    75.16,
+    34.91
+   ],
+   [
+    19.2,
+    36.05,
+    -140.49,
+    109.93,
+    81.33,
+    41.37
+   ],
+   [
+    39.14,
+    32.61,
+    -137.38,
+    99.47,
+    82.11,
+    36.18
+   ],
+   [
+    151.9,
+    38.2,
+    -100.7,
+    -20.7,
+    71.9,
+    -69.5
+   ]
+  ],
+  "end_joints_deg": [
+   -0.8,
+   53.4,
+   -137.2,
+   90.4,
+   84.1,
+   31.7
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s060",
+   "command": 3
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

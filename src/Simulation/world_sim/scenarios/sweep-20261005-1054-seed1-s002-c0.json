@@ -1,0 +1,113 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path sphere",
+   "role": "avoid",
+   "type": "sphere",
+   "center_mm": [
+    -365,
+    58,
+    261
+   ],
+   "radius_mm": 58
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    -298,
+    -575,
+    797
+   ],
+   "radius_mm": 68,
+   "name": "random sphere 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    143,
+    -556,
+    975
+   ],
+   "radius_mm": 87,
+   "name": "random sphere 3"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s002 cmd 0 joints: slow_single_move",
+ "start_joints_deg": [
+  -18.6,
+  -16.5,
+  -100.2,
+  -80.3,
+  130.7,
+  -162.1
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -94.8,
+    71.3,
+    -87.4,
+    77.2,
+    -15.1,
+    -137.8
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "slow_single_move"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 2.4231066703796387,
+   "max_batch_s": null,
+   "before_motion_s": 2.4231066703796387,
+   "compile_s": 0.003978014
+  },
+  "goal_joints_deg": [
+   -94.8,
+   71.3,
+   -87.4,
+   77.2,
+   -15.1,
+   -137.8
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -94.8,
+   71.3,
+   -87.4,
+   77.2,
+   -15.1,
+   -137.8
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s002",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

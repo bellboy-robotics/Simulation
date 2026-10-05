@@ -1,0 +1,136 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    447,
+    -170,
+    724
+   ],
+   "radius_mm": 82,
+   "name": "random sphere 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    297,
+    -419,
+    862
+   ],
+   "radius_mm": 67,
+   "name": "random sphere 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s046 cmd 0 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  -68.5,
+  -15.6,
+  -115.8,
+  -112.7,
+  -32.4,
+  -125.1
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -39.1,
+    97.8,
+    -168.9,
+    178.7,
+    -0.3,
+    -27.3
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 6 would turn 99deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 2.622964859008789,
+   "max_batch_s": null,
+   "before_motion_s": 2.622964859008789,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -39.1,
+   97.8,
+   -168.9,
+   178.7,
+   -0.3,
+   -27.3
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -68.5,
+    -15.6,
+    -115.8,
+    -112.7,
+    -32.4,
+    -125.1
+   ],
+   [
+    -68.48,
+    5.05,
+    -126.65,
+    -54.91,
+    -27.32,
+    -112.13
+   ],
+   [
+    -50.11,
+    68.38,
+    -151.0,
+    125.09,
+    -5.32,
+    -34.08
+   ],
+   [
+    -39.1,
+    97.8,
+    -168.9,
+    178.7,
+    -0.3,
+    -27.3
+   ]
+  ],
+  "end_joints_deg": [
+   -57.939572653680216,
+   43.910999306066834,
+   -152.2245762962359,
+   0.0070771165167645795,
+   -13.840319673709487,
+   -131.46981706910157
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s046",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

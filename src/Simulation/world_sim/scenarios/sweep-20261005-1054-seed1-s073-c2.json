@@ -1,0 +1,125 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path sphere",
+   "role": "avoid",
+   "type": "sphere",
+   "center_mm": [
+    -130,
+    247,
+    1125
+   ],
+   "radius_mm": 59
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    247,
+    489
+   ],
+   "top_height_mm": 610,
+   "size_mm": [
+    498,
+    386,
+    36
+   ],
+   "yaw_deg": 158,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    -191,
+    -432,
+    589
+   ],
+   "radius_mm": 52,
+   "name": "random sphere 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    399,
+    -227,
+    681
+   ],
+   "radius_mm": 89,
+   "name": "random sphere 3"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s073 cmd 2 replay_policy: replay_stall",
+ "start_joints_deg": [
+  -46.848,
+  18.437,
+  -76.311,
+  -213.741,
+  118.821,
+  36.848
+ ],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-policy_record-20260125-193134-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "flag": {
+  "problems": [
+   "replay_stall"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 11.82328486442566,
+   "max_batch_s": 1.886744499206543,
+   "before_motion_s": 0.6796109676361084,
+   "compile_s": 0.15935993200000004
+  },
+  "goal_joints_deg": [
+   136.63,
+   14.28,
+   -147.75,
+   -42.17,
+   106.55,
+   232.57
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   136.88771436405244,
+   14.63370932505629,
+   -148.62273067894304,
+   -41.98792197920931,
+   106.70424781793068,
+   232.17512339938838
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s073",
+   "command": 2
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

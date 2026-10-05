@@ -1,0 +1,98 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -228,
+    -718
+   ],
+   "top_height_mm": 729,
+   "size_mm": [
+    598,
+    396,
+    37
+   ],
+   "yaw_deg": 12,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s035 cmd 0 pose: ik_miss",
+ "start_joints_deg": [
+  0.2,
+  -77.6,
+  -34.7,
+  46.1,
+  102.1,
+  130.9
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -731.3,
+    342.2,
+    332.3,
+    -0.1563,
+    -2.0665,
+    -0.7957
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "ik_miss"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0.12484288215637207,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -16.0,
+   -83.9,
+   -144.8,
+   -24.0,
+   -68.3,
+   166.3
+  ],
+  "pose_error_mm_deg": [
+   22.456382794582886,
+   8.899798497665476
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -18.697171569857176,
+   -112.27400070869845,
+   -102.57635469114177,
+   162.11802334672936,
+   89.40800951854565,
+   341.10751552836064
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s035",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

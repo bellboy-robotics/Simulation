@@ -1,0 +1,98 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    260,
+    493
+   ],
+   "top_height_mm": 649,
+   "size_mm": [
+    624,
+    232,
+    36
+   ],
+   "yaw_deg": 125,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s040 cmd 0 joints: goal_invalid, slow_single_move",
+ "start_joints_deg": [
+  48.3,
+  -50.4,
+  -147.9,
+  -77.1,
+  0.8,
+  -24.9
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    57.6,
+    58.2,
+    -84.6,
+    149.0,
+    -35.1,
+    176.1
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "goal_invalid",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 4 would turn 190deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 3.61702299118042,
+   "max_batch_s": null,
+   "before_motion_s": 3.61702299118042,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   57.6,
+   58.2,
+   -84.6,
+   149.0,
+   -35.1,
+   176.1
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [
+   "self_collision"
+  ],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   45.00520927148122,
+   39.89135443233888,
+   -56.50422889016954,
+   -40.61944918276765,
+   24.002225601982975,
+   -5.4263398356518335
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s040",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

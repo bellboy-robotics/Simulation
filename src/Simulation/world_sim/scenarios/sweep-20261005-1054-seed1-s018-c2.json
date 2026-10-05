@@ -1,0 +1,118 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path sphere",
+   "role": "avoid",
+   "type": "sphere",
+   "center_mm": [
+    -696,
+    -329,
+    784
+   ],
+   "radius_mm": 84
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -18,
+    654
+   ],
+   "top_height_mm": 559,
+   "size_mm": [
+    627,
+    208,
+    42
+   ],
+   "yaw_deg": 160,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -399,
+    619
+   ],
+   "top_height_mm": 747,
+   "size_mm": [
+    496,
+    210,
+    25
+   ],
+   "yaw_deg": 181,
+   "name": "random table 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s018 cmd 2 replay_policy: replay_stall",
+ "start_joints_deg": [
+  -40.664,
+  26.09,
+  -162.891,
+  -20.328,
+  59.551,
+  -144.782
+ ],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-unknown-20260412-183445-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "flag": {
+  "problems": [
+   "replay_stall"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 6.790784120559692,
+   "max_batch_s": 1.5879874229431152,
+   "before_motion_s": 0.5830020904541016,
+   "compile_s": 0.156385422
+  },
+  "goal_joints_deg": [
+   -146.54,
+   4.36,
+   -88.78,
+   53.0,
+   83.31,
+   80.77
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -146.39443610373976,
+   4.501479288066039,
+   -89.02243850970926,
+   53.23594922137259,
+   83.61596129105065,
+   80.69500357173801
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s018",
+   "command": 2
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

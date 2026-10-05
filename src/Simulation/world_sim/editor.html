@@ -58,7 +58,14 @@
   #hud { position: absolute; bottom: 10px; left: 10px; right: 10px; background: var(--panel); border: 1px solid var(--line);
          border-radius: 8px; padding: 8px 12px; display: none; }
   #hud .row { margin: 0; }
-  #hud input[type=range] { flex: 1; }
+  #hud input[type=range] { width: 100%; margin: 0; }
+  #track { position: relative; flex: 1; padding-top: 16px; }
+  #markers { position: absolute; top: 0; left: 0; right: 0; height: 16px; }
+  /* A marker sits where the slider thumb (~16px wide) is when that sample is shown. */
+  .marker { position: absolute; transform: translateX(-50%); font-size: 10px; line-height: 14px; padding: 0 3px;
+            border-radius: 3px; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
+  .marker.failed { background: var(--bad); }
+  .marker::after { content: ''; position: absolute; left: 50%; top: 14px; width: 1px; height: 6px; background: inherit; }
   #legend { position: absolute; top: 10px; right: 10px; background: var(--panel); border: 1px solid var(--line);
             border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--muted); }
   #legend div { display: flex; gap: 6px; align-items: center; }
@@ -105,20 +112,22 @@
     </section>
 
     <section>
-      <h2>Arm <span id="sliderTarget" class="small muted"></span></h2>
+      <h2>Arm init position <span id="sliderTarget" class="small muted"></span></h2>
       <div id="sliders"></div>
       <div class="small" id="tcp"></div>
       <div class="small" id="clearance"></div>
       <div class="row">
-        <button id="editStart">Edit start joints</button>
-        <button id="addJoints">+ joints cmd</button>
-        <button id="addPose">+ pose cmd (TCP)</button>
+        <button id="editStart" title="The sliders set the joints the arm starts the scenario from">Edit init position</button>
+        <button id="jumpInit" title="Show the arm at its init position (nothing is changed)">Jump to init position</button>
       </div>
     </section>
 
     <section>
       <h2>Commands</h2>
-      <div class="row"><button id="addReplay">+ replay_policy</button></div>
+      <div class="row">
+        <button id="addJoints" title="A joints command to the joints on the arm sliders">+ joints (sliders)</button>
+        <button id="addPose" title="A pose command to the TCP pose of the arm sliders">+ pose (TCP)</button>
+        <button id="addReplay">+ replay_policy</button></div>
       <div class="row"><button id="randMotion" title="Valid configurations only: joint limits, clear of objects, floor and Billie's body">🎲 Random</button>
         <input id="randCount" type="number" value="3" min="1" max="50" style="width:50px">
         <select id="randKind"><option value="joints">joints cmds</option><option value="pose">pose cmds</option></select>
@@ -136,14 +145,18 @@
       <div class="row"><label>note</label><input id="note" type="text" class="wide" placeholder="what this run tests"></div>
       <div class="row"><label style="width:auto"><input id="keepGoing" type="checkbox"> keep going</label>
         <label style="width:auto"><input id="continueOnBlock" type="checkbox"> continue on block</label></div>
-      <div class="row"><button id="run" class="primary">Run</button></div>
+      <div class="row"><label style="width:auto" title="Plan every command a second time with the avoid objects removed (same planner, same process), to compare planning times">
+        <input id="compareFree" type="checkbox"> also plan without obstacles</label></div>
+      <div class="row"><button id="run" class="primary">Run</button>
+        <button id="reset" title="Arm back to the start joints; clears the last run's results from the page (History keeps them)">Reset</button></div>
       <div id="runView"></div>
       <div id="outcomes"></div>
       <div id="events"></div>
     </section>
 
     <section>
-      <h2>History <a href="/runs/index.html" target="_blank" class="small">all runs ↗</a></h2>
+      <h2>History <span><a href="/runs/index.html" target="_blank" class="small">all runs ↗</a>
+        <button id="cleanHistory" class="mini" title="Delete every finished run and its reports">Clean</button></span></h2>
       <div id="history" class="list"></div>
     </section>
   </div>
@@ -166,7 +179,7 @@
     <div id="hud">
       <div class="row">
         <button id="play">▶</button>
-        <input id="timeline" type="range" min="0" max="0" value="0">
+        <div id="track"><div id="markers"></div><input id="timeline" type="range" min="0" max="0" value="0"></div>
         <select id="speed"><option>0.5</option><option selected>1</option><option>2</option><option>5</option></select>
         <button id="closePlayback">Back to editing</button>
       </div>
@@ -345,10 +358,15 @@ function colorRobot(states) {
   });
 }
 
-/** Builds the planner-capsule overlay, one capsule per model link (once, after the model is loaded). */
-function buildCapsules() {
+/**
+ * Builds the planner-capsule overlay, one capsule per model link, replacing any earlier one.
+ * links: per model link {radius, height} (m): the editor's model, or a played run's model.
+ */
+function buildCapsules(links) {
+  for (const group of capsuleMeshes) if (group) { capsuleGroup.remove(group); group.children[0].geometry.dispose(); }
+  capsuleMeshes.length = 0;
   const material = new THREE.MeshStandardMaterial({ color: CAPSULE_COLOR, transparent: true, opacity: 0.35, depthWrite: false });
-  for (const link of model.links) {
+  for (const link of links) {
     if (link.radius <= 0) { capsuleMeshes.push(null); continue; }
     const group = new THREE.Group();
     const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(link.radius, link.height, 4, 16), material);
@@ -399,9 +417,9 @@ async function refreshArm() {
   fkBusy = true; fkDirty = false;
   try {
     const reply = await api('/api/fk', { joints: [previewJoints], scenario: scn });
-    const clearance = reply.clearance_mm[0];
+    const clearance = reply.clearance_mm[0], mesh = reply.mesh_clearance_mm[0];
     const margin = model.margin_mm;
-    showArm(reply.poses[0], clearance.map((c) => c === null ? 0 : c < 0 ? 2 : c < margin ? 1 : 0));
+    showArm(reply.poses[0], clearance.map((c, i) => Math.max(clearanceState(c), clearanceState(mesh[i]))));
     lastTcp = reply.tcp[0];
     setPose(tcpAxes, lastTcp);
     $('tcp').textContent = `TCP [${lastTcp.slice(0, 3).map((v) => v.toFixed(1)).join(', ')}] mm  rotvec [${lastTcp.slice(3).map((v) => v.toFixed(3)).join(', ')}]`;
@@ -411,11 +429,30 @@ async function refreshArm() {
     else {
       const [c, name] = finite.reduce((a, b) => (b[0] < a[0] ? b : a));
       const cls = c < 0 ? 'bad' : c < margin ? 'warn' : 'ok';
-      $('clearance').innerHTML = `closest avoid object: <span class="${cls}">${c.toFixed(0)} mm</span> <span class="muted">(${name})</span>`;
+      $('clearance').innerHTML = `closest avoid object: <span class="${cls}">${c.toFixed(0)} mm</span> <span class="muted">(${name})</span>`
+        + meshNote(reply.summary[0]);
     }
   } catch (e) { toast(e.message, true); }
   fkBusy = false;
   if (fkDirty) refreshArm();
+}
+
+/** Clearance state of a distance. mm: distance or null (none). Returns: 0 clear / 1 within the planner margin / 2 inside. */
+function clearanceState(mm) { return mm === null ? 0 : mm < 0 ? 2 : mm < model.margin_mm ? 1 : 0; }
+
+/**
+ * The real-mesh clearance where it disagrees with the planner's capsules (e.g. the camera bracket
+ * outside the gripper capsule), else ''. summary: one /api/fk or /api/playback summary entry.
+ * Returns: HTML like "real mesh -24 mm inside table (planner model +16 mm)".
+ */
+function meshNote(summary) {
+  const { mesh_mm: m, mesh_link_capsule_mm: c } = summary;
+  const state = clearanceState(m);
+  if (m === null || state === Math.max(clearanceState(summary.capsule_mm), clearanceState(c))) return '';
+  const where = state === 2 ? `inside ${esc(summary.mesh_object)}` : `from ${esc(summary.mesh_object)}`;
+  const planner = c === null ? '' : ` <span class="muted">(planner model ${c >= 0 ? '+' : ''}${c.toFixed(0)} mm)</span>`;
+  return ` <span class="${['ok', 'warn', 'bad'][state]}">real mesh ${m.toFixed(0)} mm ${where}</span>`
+    + `${planner} <span class="muted">${esc(summary.mesh_link)}</span>`;
 }
 
 // ----- objects ----------------------------------------------------------------------------------
@@ -688,7 +725,7 @@ function select(kind, index = -1) {
 
 /** The sliders' label: what they edit right now. */
 function renderSliderTarget() {
-  const label = sel.kind === 'start' ? 'editing: start joints'
+  const label = sel.kind === 'start' ? 'editing: init position'
     : sel.kind === 'command' && scn.commands[sel.index].cmd === 'joints' ? `editing: command ${sel.index + 1}` : 'free preview';
   $('sliderTarget').textContent = label;
   $('editStart').classList.toggle('primary', sel.kind === 'start');
@@ -935,10 +972,11 @@ function renderTargets() {
 /** Starts a run of the edited scenario on the ticked machines and follows it. */
 async function runPlanner() {
   if (!chosen.size) { toast('Tick a machine to run on', true); return; }
+  clearRunView();
   $('run').disabled = true;
   try {
     const meta = await api('/api/run', { scenario: scn, file: fileName, note: $('note').value,
-      keep_going: $('keepGoing').checked, continue_on_block: $('continueOnBlock').checked,
+      keep_going: $('keepGoing').checked, continue_on_block: $('continueOnBlock').checked, compare_no_obstacles: $('compareFree').checked,
       targets: [LOCAL, ...robots].filter((t) => chosen.has(t)), robot_checkout: $('checkout').value.trim() });
     runId = meta.id; autoPlayed = false;
     $('runView').innerHTML = runDetails(meta, true);
@@ -947,11 +985,29 @@ async function runPlanner() {
   $('run').disabled = false;
 }
 
+/** Removes the last run from the page: its machines, playback, outcomes and messages (History keeps it). */
+function clearRunView() {
+  clearTimeout(runTimer); runId = null;
+  exitPlayback();
+  $('runView').innerHTML = ''; $('outcomes').innerHTML = ''; $('events').innerHTML = '';
+}
+
+/** Reset: clears the last run from the page and puts the arm back at the scenario's start joints. */
+function resetRun() {
+  clearRunView();
+  select(null);
+  setPreview(scn.start_joints_deg);
+  loadHistory();  // a run still going on shows up there
+}
+
 /** Follows the current run until every machine finished; plays the first finished one. */
 async function pollRun() {
   clearTimeout(runTimer);
+  const id = runId;
+  if (!id) return;
   try {
-    const meta = await api(`/api/run?id=${encodeURIComponent(runId)}`);
+    const meta = await api(`/api/run?id=${encodeURIComponent(id)}`);
+    if (id !== runId) return;  // reset or a newer run meanwhile
     $('runView').innerHTML = runDetails(meta, true);
     const done = Object.keys(meta.targets).filter((n) => meta.targets[n].status === 'done');
     if (!autoPlayed && done.length) { autoPlayed = true; playTarget(meta.id, done.includes(LOCAL) ? LOCAL : done[0]); }
@@ -966,6 +1022,7 @@ function runDetails(meta, live) {
     const s = t.summary;
     const state = t.status === 'done'
       ? `${s.failed ? `<span class="bad">${s.failed} failed</span>` : '<span class="ok">✓</span>'} planner ${s.planner_s.toFixed(1)}s · estimate ${s.estimate_s.toFixed(1)}s`
+        + (s.free_planner_s == null ? '' : ` · <span class="muted">no obstacles ${s.free_planner_s.toFixed(1)}s</span>`)
       : t.status === 'failed' ? '<span class="bad">failed</span>' : `<span class="warn">${esc(t.stage || t.status)}…</span>`;
     const actions = t.status !== 'done' ? '' : ` <button class="mini" data-play="${esc(meta.id)}|${esc(name)}">▶ play</button>
       <a class="small" target="_blank" href="/runs/${encodeURIComponent(meta.id)}/${encodeURIComponent(name)}.html">report ↗</a>`;
@@ -977,19 +1034,30 @@ function runDetails(meta, live) {
   return lines.join('') + timingTable(meta);
 }
 
-/** Seconds per command on each finished machine of a run, side by side. meta: the run. Returns: HTML ('' if none finished). */
+/** One command's times on one machine. x: a timing-summary command row (or undefined). Returns: a table cell. */
+function timeCell(x) {
+  if (!x) return '<td>—</td>';
+  const mark = (ok) => ok ? '' : ' <span class="bad">✗</span>';
+  const free = x.free_planner_s == null ? ''
+    : `<br><span class="muted">${x.free_planner_s.toFixed(2)} / ${x.free_estimate_s.toFixed(2)}${mark(x.free_ok)}</span>`;
+  return `<td>${x.planner_s.toFixed(2)} / ${x.estimate_s.toFixed(2)}${mark(x.ok)}${free}</td>`;
+}
+
+/** Seconds per command on each finished machine of a run, with obstacles and (grey) without. meta: the run. Returns: HTML ('' if none finished). */
 function timingTable(meta) {
   const done = Object.entries(meta.targets).filter(([, t]) => t.status === 'done');
   if (!done.length) return '';
   const rows = [];
   for (let c = 0; c < Math.max(...done.map(([, t]) => t.summary.commands.length)); c++) {
     const cells = done.map(([, t]) => t.summary.commands[c]);
-    rows.push(`<tr><td>${c + 1}. ${esc(cells.find(Boolean).cmd)}</td>${cells.map((x) => !x ? '<td>—</td>'
-      : `<td>${x.planner_s.toFixed(2)} / ${x.estimate_s.toFixed(2)}${x.ok ? '' : ' <span class="bad">✗</span>'}</td>`).join('')}</tr>`);
+    rows.push(`<tr><td>${c + 1}. ${esc(cells.find(Boolean).cmd)}</td>${cells.map(timeCell).join('')}</tr>`);
   }
+  const totals = done.map(([, t]) => timeCell({ ...t.summary, ok: !t.summary.failed, free_ok: !t.summary.free_failed }));
+  rows.push(`<tr><td><b>total</b></td>${totals.join('')}</tr>`);
   rows.push(`<tr class="muted"><td>planner build</td>${done.map(([, t]) => `<td>${t.summary.build_s.toFixed(1)}</td>`).join('')}</tr>`);
+  const free = done.some(([, t]) => t.summary.free_planner_s != null);
   return `<table class="timing" title="planner: time in planner calls · estimate: robot time (replays: BufferingPlayer wall time)">
-    <tr><th>seconds: planner / estimate</th>${done.map(([n]) => `<th>${esc(n)}</th>`).join('')}</tr>${rows.join('')}</table>`;
+    <tr><th>seconds: planner / estimate${free ? '<br><span class="muted">grey: without obstacles</span>' : ''}</th>${done.map(([n]) => `<th>${esc(n)}</th>`).join('')}</tr>${rows.join('')}</table>`;
 }
 
 /** Plays one machine's path of a run. id: run id; target: machine name; withScenario: first load the run's scenario. */
@@ -1042,16 +1110,37 @@ function startPlayback(reply, label) {
   $('events').innerHTML = reply.events.map((e) => `<div class="${levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}</div>`).join('');
   $('hud').style.display = 'block';
   $('timeline').max = reply.poses.length - 1; playPos = 0; playing = true; $('play').textContent = '⏸';
+  buildCapsules(reply.capsules);  // the run's planner model, e.g. a robot's gripper box
+  renderMarkers(reply);
   const points = reply.tcp_mm.map((p) => new THREE.Vector3(p[0] / 1000, p[1] / 1000, p[2] / 1000));
   pathLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x2f6fdf }));
   armRoot.add(pathLine);
   renderCommandList(); showSample(0);
 }
 
+/**
+ * Marks on the play bar where the arm reaches each command's last target (red if the command
+ * failed); a click jumps there. reply: /api/playback reply.
+ */
+function renderMarkers(reply) {
+  const last = new Map();  // command -> last sample index moving into one of its targets
+  reply.owner.forEach((i, k) => { if (i >= 0) last.set(reply.targets[i].command, k); });
+  const span = Math.max(reply.poses.length - 1, 1);
+  let at = 0;  // where the arm is when a command starts: the previous command's end
+  $('markers').innerHTML = reply.commands.map((c, i) => {
+    const reached = last.has(i);
+    if (reached) at = last.get(i);
+    const title = reached ? `cmd ${i + 1} ${c.cmd}: last target reached (sample ${at})` : `cmd ${i + 1} ${c.cmd}: failed before sending any target`;
+    return `<span class="marker ${c.ok ? '' : 'failed'}" data-sample="${at}" style="left: calc(8px + (100% - 16px) * ${at / span})"
+      title="${esc(title)}">${i + 1}${reached ? '' : '✗'}</span>`;
+  }).join('');
+}
+
 /** Leaves the playback and shows the previewed joints again. */
 function exitPlayback() {
   if (!play) return;
   play = null; playing = false; $('hud').style.display = 'none';
+  buildCapsules(model.links);
   if (pathLine) { armRoot.remove(pathLine); pathLine.geometry.dispose(); pathLine = null; }
   renderCommandList(); attachGizmo(); refreshArm();
 }
@@ -1063,10 +1152,11 @@ function showSample(k) {
   showArm(play.poses[k], play.link_state[k]);
   $('timeline').value = k;
   const t = i >= 0 ? play.targets[i] : null;
-  const worst = Math.max(...play.link_state[k]);
+  const summary = play.summary[k], worst = Math.max(clearanceState(summary.capsule_mm), clearanceState(summary.mesh_link_capsule_mm));
   $('playLabel').innerHTML = (t ? `cmd ${t.command + 1} ${esc(scn.commands[t.command]?.cmd ?? '')}: ${esc(t.kind)} #${i}` : 'start')
     + (t?.blocked ? ` <span class="bad">guard refused: ${esc(t.blocked)}</span>` : '')
-    + (worst === 2 ? ' <span class="bad">inside an object</span>' : worst === 1 ? ' <span class="warn">within margin</span>' : '');
+    + (worst === 2 ? ' <span class="bad">inside an object</span>' : worst === 1 ? ' <span class="warn">within margin</span>' : '')
+    + meshNote(summary);
 }
 
 // ----- wiring -----------------------------------------------------------------------------------
@@ -1088,6 +1178,18 @@ $('commands').addEventListener('click', (e) => {
   const row = e.target.closest('[data-cmd]'); if (row) select('command', +row.dataset.cmd);
 });
 $('editStart').onclick = () => select(sel.kind === 'start' ? null : 'start');
+$('jumpInit').onclick = () => { exitPlayback(); if (sel.kind === 'command' || sel.kind === 'start') select(null); setPreview(scn.start_joints_deg); };
+$('markers').addEventListener('click', (e) => {
+  const k = e.target.dataset.sample; if (k === undefined) return;
+  playing = false; $('play').textContent = '▶'; playPos = +k; showSample(playPos);
+});
+$('cleanHistory').onclick = async () => {
+  const finished = history.filter((m) => Object.values(m.targets).every((t) => t.status === 'done' || t.status === 'failed'));
+  if (!finished.length) { toast('No finished runs to delete'); return; }
+  if (!confirm(`Delete all ${finished.length} finished runs and their reports? Runs still going on are kept.`)) return;
+  try { const { deleted } = await api('/api/runs/clean', {}); openRun = null; toast(`Deleted ${deleted.length} runs`); loadHistory(); }
+  catch (e) { toast(e.message, true); }
+};
 $('addJoints').onclick = () => { scn.commands.push({ cmd: 'joints', joints: previewJoints.slice() }); select('command', scn.commands.length - 1); edited(false); };
 $('addPose').onclick = () => {
   if (!lastTcp) return;
@@ -1096,6 +1198,8 @@ $('addPose').onclick = () => {
 };
 $('addReplay').onclick = () => { scn.commands.push({ cmd: 'replay_policy', repo_id: 'bellboy-robotics/', speed: 1.0, transform: 'poses' }); select('command', scn.commands.length - 1); edited(false); };
 $('run').onclick = runPlanner;
+$('reset').onclick = resetRun;
+$('compareFree').addEventListener('change', () => saveSetting('compareFree', $('compareFree').checked));
 $('randObject').onclick = () => addRandom('object', 1, $('objSeed'));
 $('randMotion').onclick = () => addRandom($('randKind').value, Math.max(1, parseInt($('randCount').value) || 1), $('motionSeed'));
 $('targets').addEventListener('change', (e) => {
@@ -1191,10 +1295,11 @@ async function start() {
   try { model = await api('/api/model'); }
   catch (e) { $('loading').textContent = e.message; return; }
   $('loading').remove();
-  buildCapsules(); buildSliders(); loadRobot();
+  buildCapsules(model.links); buildSliders(); loadRobot();
   robots = [...new Set([...model.robots, ...loadSetting('robots', [])])];
   chosen = new Set(loadSetting('chosen', [LOCAL]).filter((t) => t === LOCAL || robots.includes(t)));
   $('checkout').value = loadSetting('checkout', model.robot_checkout);
+  $('compareFree').checked = loadSetting('compareFree', true);
   renderTargets(); loadHistory();
   const wanted = new URLSearchParams(location.search).get('file');
   const { files } = await api('/api/scenarios');

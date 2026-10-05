@@ -1,0 +1,115 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    516,
+    -588,
+    577
+   ],
+   "end_mm": [
+    430,
+    -100,
+    577
+   ],
+   "radius_mm": 38,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -5,
+    -462
+   ],
+   "top_height_mm": 741,
+   "size_mm": [
+    302,
+    242,
+    45
+   ],
+   "yaw_deg": 31,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s083 cmd 0 pose: ik_miss",
+ "start_joints_deg": [
+  176.3,
+  80.8,
+  -167.8,
+  164.2,
+  -65.1,
+  -177.0
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    153.9,
+    152.1,
+    1030.3,
+    0.6623,
+    0.2066,
+    -0.5885
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "ik_miss"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0.05069756507873535,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -118.3,
+   -71.2,
+   -107.2,
+   29.2,
+   37.5,
+   -125.4
+  ],
+  "pose_error_mm_deg": [
+   26.554058185055624,
+   11.346581550907176
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   246.37902087280685,
+   -46.846730724554206,
+   -156.30530013661672,
+   198.40696867116884,
+   -49.78809704910684,
+   -296.82431189366315
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s083",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

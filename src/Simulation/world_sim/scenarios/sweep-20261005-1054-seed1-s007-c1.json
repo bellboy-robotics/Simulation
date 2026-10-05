@@ -1,0 +1,138 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    468,
+    317,
+    783
+   ],
+   "end_mm": [
+    226,
+    517,
+    783
+   ],
+   "radius_mm": 44,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    69,
+    202,
+    802
+   ],
+   "end_mm": [
+    371,
+    108,
+    802
+   ],
+   "radius_mm": 21,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s007 cmd 1 pose: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  49.724,
+  25.565,
+  -71.833,
+  -15.696,
+  126.12,
+  127.976
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -263.1,
+    545.8,
+    977.6,
+    -0.4745,
+    1.1675,
+    2.7456
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 4 would turn 99deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 3.5252761840820312,
+   "max_batch_s": null,
+   "before_motion_s": 3.444350242614746,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -65.0,
+   -42.1,
+   -176.5,
+   154.1,
+   11.2,
+   -94.8
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    49.72,
+    25.56,
+    -71.83,
+    -15.7,
+    126.12,
+    127.98
+   ],
+   [
+    25.79,
+    9.52,
+    -99.15,
+    34.19,
+    93.35,
+    67.98
+   ],
+   [
+    -65.0,
+    -42.1,
+    -176.5,
+    154.1,
+    11.2,
+    -94.8
+   ]
+  ],
+  "end_joints_deg": [
+   92.57009340612724,
+   30.790192250094,
+   -143.5239125012585,
+   -34.322889032229654,
+   0.6128112424401554,
+   31.15405008755892
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s007",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

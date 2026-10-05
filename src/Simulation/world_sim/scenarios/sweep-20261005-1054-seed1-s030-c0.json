@@ -1,0 +1,128 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    78,
+    357,
+    763
+   ],
+   "radius_mm": 42,
+   "name": "random sphere 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    -65,
+    475,
+    490
+   ],
+   "radius_mm": 97,
+   "name": "random sphere 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s030 cmd 0 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  90.5,
+  -96.4,
+  -153.1,
+  -72.0,
+  -16.0,
+  105.5
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -157.3,
+    -87.0,
+    -131.9,
+    -46.4,
+    81.5,
+    -96.7
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 1 would turn 123deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 3.4248275756835938,
+   "max_batch_s": null,
+   "before_motion_s": 3.4248275756835938,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -157.3,
+   -87.0,
+   -131.9,
+   -46.4,
+   81.5,
+   -96.7
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    90.5,
+    -96.4,
+    -153.1,
+    -72.0,
+    -16.0,
+    105.5
+   ],
+   [
+    -129.25,
+    -75.21,
+    -125.08,
+    -37.95,
+    46.49,
+    -19.9
+   ],
+   [
+    -157.3,
+    -87.0,
+    -131.9,
+    -46.4,
+    81.5,
+    -96.7
+   ]
+  ],
+  "end_joints_deg": [
+   -25.484952095313318,
+   -71.0307366886552,
+   -154.25736353663677,
+   -94.95012746393155,
+   -29.315906163030505,
+   43.104125153751134
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s030",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

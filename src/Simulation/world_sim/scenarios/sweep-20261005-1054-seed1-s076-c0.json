@@ -1,0 +1,121 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    67,
+    437
+   ],
+   "top_height_mm": 881,
+   "size_mm": [
+    680,
+    334,
+    37
+   ],
+   "yaw_deg": 131,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s076 cmd 0 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  100.3,
+  81.2,
+  -107.6,
+  138.1,
+  47.1,
+  -125.1
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -80.2,
+    45.0,
+    -114.5,
+    96.9,
+    -63.7,
+    123.9
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: no detour found around the obstacle (link3 would still go 58mm in).",
+  "timing": {
+   "planner_s": 8.318198204040527,
+   "max_batch_s": null,
+   "before_motion_s": 8.318198204040527,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -80.2,
+   45.0,
+   -114.5,
+   96.9,
+   -63.7,
+   123.9
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    100.3,
+    81.2,
+    -107.6,
+    138.1,
+    47.1,
+    -125.1
+   ],
+   [
+    -0.8,
+    74.59,
+    -113.61,
+    130.63,
+    15.4,
+    -43.48
+   ],
+   [
+    -80.2,
+    45.0,
+    -114.5,
+    96.9,
+    -63.7,
+    123.9
+   ]
+  ],
+  "end_joints_deg": [
+   100.3,
+   81.2,
+   -107.6,
+   138.1,
+   47.1,
+   -125.1
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s076",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

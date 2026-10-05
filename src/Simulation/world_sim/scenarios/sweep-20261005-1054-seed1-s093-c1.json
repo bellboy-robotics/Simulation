@@ -1,0 +1,144 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    160,
+    138,
+    968
+   ],
+   "radius_mm": 65,
+   "name": "random sphere 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    -115,
+    348,
+    586
+   ],
+   "radius_mm": 53,
+   "name": "random sphere 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "wall",
+   "start_xy_mm": [
+    493,
+    -208
+   ],
+   "end_xy_mm": [
+    357,
+    524
+   ],
+   "height_mm": 702,
+   "thickness_mm": 58,
+   "name": "random wall 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s093 cmd 1 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  -149.2,
+  88.6,
+  -105.4,
+  -118.4,
+  -24.3,
+  -160.4
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    53.0,
+    20.4,
+    -153.0,
+    77.2,
+    92.9,
+    127.9
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 6 would turn 98deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 8.159536361694336,
+   "max_batch_s": null,
+   "before_motion_s": 8.159536361694336,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   53.0,
+   20.4,
+   -153.0,
+   77.2,
+   92.9,
+   127.9
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -149.2,
+    88.6,
+    -105.4,
+    -118.4,
+    -24.3,
+    -160.4
+   ],
+   [
+    1.9,
+    20.02,
+    -139.72,
+    46.0,
+    69.58,
+    89.6
+   ],
+   [
+    53.0,
+    20.4,
+    -153.0,
+    77.2,
+    92.9,
+    127.9
+   ]
+  ],
+  "end_joints_deg": [
+   -21.07803378809834,
+   36.734509299850686,
+   -106.6778901179236,
+   -28.812152390985382,
+   11.016801433096257,
+   -19.270724752577948
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s093",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

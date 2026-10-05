@@ -1,0 +1,140 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path capsule",
+   "role": "avoid",
+   "type": "capsule",
+   "start_mm": [
+    485,
+    262,
+    -440
+   ],
+   "end_mm": [
+    485,
+    262,
+    504
+   ],
+   "radius_mm": 34
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -140,
+    -385
+   ],
+   "top_height_mm": 532,
+   "size_mm": [
+    354,
+    405,
+    36
+   ],
+   "yaw_deg": 21,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    221,
+    -223
+   ],
+   "top_height_mm": 874,
+   "size_mm": [
+    324,
+    354,
+    29
+   ],
+   "yaw_deg": 78,
+   "name": "random table 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    -475,
+    -563,
+    643
+   ],
+   "end_mm": [
+    -255,
+    -807,
+    643
+   ],
+   "radius_mm": 32,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s052 cmd 1 replay_policy: replay_stall",
+ "start_joints_deg": [
+  77.139,
+  44.875,
+  -143.407,
+  4.358,
+  -40.885,
+  41.956
+ ],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-coffee-drawer-br-20260115-084428-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "flag": {
+  "problems": [
+   "replay_stall"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 10.240996360778809,
+   "max_batch_s": 2.8622498512268066,
+   "before_motion_s": 1.027545690536499,
+   "compile_s": 0.152211666
+  },
+  "goal_joints_deg": [
+   24.6,
+   -28.72,
+   -11.38,
+   112.42,
+   -14.75,
+   86.7
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   24.642953695190826,
+   -28.673642984806694,
+   -11.280919725658773,
+   112.6999176449621,
+   -14.479106285645761,
+   86.38026862174904
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s052",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

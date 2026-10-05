@@ -18,7 +18,7 @@ import numpy as np
 from billie_utils import arm_motion_guard_poc
 
 from Simulation.world_sim.commands import SimBrain, run_command
-from Simulation.world_sim.planner import SimPlanner
+from Simulation.world_sim.planner import SimPlanner, gripper_geometry
 from Simulation.world_sim.sim_arm import SimArm
 from Simulation.world_sim.world import World, load_scenario
 
@@ -42,26 +42,33 @@ def run_scenario(
     commands: Command specs, see commands.run_command.
     continue_on_block: Keep playing moves the arm-move guard refuses (flagged), instead of failing.
     stop_on_error: Stop at the first failed command, like a brain script; else run the rest anyway.
-    Returns: Results dict (see save_results) with the arm's trajectory, operator messages and command outcomes.
+    Returns: Results dict (see save_results) with the arm's trajectory, operator messages and command outcomes
+        (with start_s / end_s), the planner calls (timings: call, command, n, seconds, start_s, compile_s,
+        cache_hits, cache_misses), the planner build (planner_build, see _build_info), and the planner's log
+        lines, cloud messages and JAX compile totals during this run (planner_log, planner_messages, planner_compile).
     """
+    reused = planner.runs_started > 0  # an earlier run already reported (and waited for) the build
     planner.set_obstacles(*world.capsules("avoid"))
     first_timing = len(planner.timings)
     arm = SimArm(start_joints_deg, continue_on_block=continue_on_block)
     brain = SimBrain(planner, arm)
     outcomes = []
-    for index, spec in enumerate(commands):
-        arm.command = planner.command = index
-        t0 = time.time()
-        error = None
-        try:
-            run_command(brain, spec)
-        except (arm_motion_guard_poc.ArmMoveBlockedError, RuntimeError, ValueError) as e:
-            error = str(e)
-            brain.log(f"{spec['cmd']} failed: {e}", "ERROR")
-            logging.debug(traceback.format_exc())
-        outcomes.append({"spec": spec, "ok": error is None, "error": error, "seconds": time.time() - t0})
-        if error is not None and stop_on_error:
-            break
+    with planner.capture_run() as window:
+        for index, spec in enumerate(commands):
+            arm.command = planner.command = index
+            t0 = time.time()
+            error = None
+            try:
+                run_command(brain, spec)
+            except (arm_motion_guard_poc.ArmMoveBlockedError, RuntimeError, ValueError) as e:
+                error = str(e)
+                brain.log(f"{spec['cmd']} failed: {e}", "ERROR")
+                logging.debug(traceback.format_exc())
+            outcomes.append({"spec": spec, "ok": error is None, "error": error, "seconds": time.time() - t0,
+                             "start_s": t0 - window.t0, "end_s": time.time() - window.t0})  # fmt: skip
+            if error is not None and stop_on_error:
+                break
+    captured = window.result()
     return {
         "model_json": planner.model.to_json(),  # the arm model, so viewing needs no planner
         "start_joints_deg": start_joints_deg,
@@ -70,10 +77,70 @@ def run_scenario(
         "points": [vars(p) for p in arm.points],
         "events": brain.events,
         "commands": outcomes,
+        "started_at": window.t0,  # epoch s; every start_s / end_s / log "t" of this run is relative to it
         # Planner build (compile or cache load) and every solve of this scenario, for the timing report.
-        "timings": [t for t in planner.timings if t["call"].startswith("build_")] + planner.timings[first_timing:],
+        "timings": _run_timings([t for t in planner.timings if t["call"].startswith("build_")]
+                                + planner.timings[first_timing:], window.t0),  # fmt: skip
+        "planner_build": _build_info(planner, reused, window.t0),
+        "planner_log": captured["log"],  # the planner's log lines during this run
+        "planner_log_dropped": captured["log_dropped"],
+        "planner_messages": captured["messages"],  # its cloud messages to the operator during this run
+        "planner_compile": captured["compile"],  # JAX compile / cache totals of this run
         "machine": {"host": socket.gethostname(), "jax_devices": [str(d) for d in jax_devices()],
-                    "planner_code": inspect.getfile(type(planner.resolver))},  # fmt: skip
+                    "planner_code": inspect.getfile(type(planner.resolver)), **gripper_geometry()},  # fmt: skip
+    }
+
+
+def _run_timings(timings: list[dict], started_at: float) -> list[dict]:
+    """The planner calls of a run for its results, with start times relative to the run start.
+
+    timings: planner.timings entries (epoch "start"). started_at: The run start, epoch s.
+    Returns: Copies with "start_s" (seconds since the run start; negative for the build) instead of "start".
+    """
+    out = []
+    for t in timings:
+        row = {k: v for k, v in t.items() if k != "start"}
+        if "start" in t:
+            row["start_s"] = round(t["start"] - started_at, 4)
+        out.append(row)
+    return out
+
+
+def _build_info(planner: SimPlanner, reused: bool, started_at: float) -> dict:
+    """The planner build for a run's results: planner.build plus how it relates to this run.
+
+    planner: The planner. reused: True when an earlier run already used this build.
+    started_at: The run start, epoch s.
+    Returns: planner.build (see SimPlanner._finish_build) with "reused" and "before_run_s" (seconds from the
+        build start to the run start).
+    """
+    return {**planner.build, "reused": reused, "before_run_s": round(started_at - planner.build["built_at"], 3)}
+
+
+def run_without_obstacles(
+    planner: SimPlanner, world: World, start_joints_deg: np.ndarray, commands: list[dict],
+    continue_on_block: bool = False, stop_on_error: bool = True,
+) -> dict:  # fmt: skip
+    """Runs the same commands again with no avoid objects: the planning time without obstacles.
+
+    The planner is the same (its world cost stays compiled in, with every obstacle slot parked away),
+    so the difference to run_scenario is what the obstacles cost: detours, transits, reroutes and the
+    solver's extra work near them.
+
+    planner, start_joints_deg, commands, continue_on_block, stop_on_error: See run_scenario.
+    world: The scenario's world; only its floor height is kept.
+    Returns: {"commands": per command outcome (spec, ok, error, seconds, start_s, end_s), "timings": planner
+        calls (no build entries), "points": number of arm targets sent, "started_at", "planner_log",
+        "planner_log_dropped", "planner_messages", "planner_compile": see run_scenario}.
+    """
+    bare = run_scenario(planner, World(floor_z_m=world.floor_z_m), start_joints_deg, commands,
+                        continue_on_block=continue_on_block, stop_on_error=stop_on_error)  # fmt: skip
+    return {
+        "commands": bare["commands"],
+        "timings": [t for t in bare["timings"] if not t["call"].startswith("build_")],
+        "points": len(bare["points"]),
+        **{k: bare[k] for k in ("started_at", "planner_log", "planner_log_dropped", "planner_messages",
+                                "planner_compile")},  # fmt: skip
     }
 
 
@@ -112,6 +179,8 @@ def main() -> None:
     parser.add_argument("--out", help="results .json file (one scenario) or folder; default output/world_sim/")
     parser.add_argument("--continue-on-block", action="store_true", help="play moves the guard refuses, flagged")
     parser.add_argument("--keep-going", action="store_true", help="run the remaining commands after a failure")
+    parser.add_argument("--compare-no-obstacles", action="store_true",
+                        help="also plan every command without the avoid objects (results['no_obstacles'])")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -123,6 +192,11 @@ def main() -> None:
             continue_on_block=args.continue_on_block, stop_on_error=not args.keep_going,
         )  # fmt: skip
         results["name"] = scenario["name"]
+        if args.compare_no_obstacles:
+            results["no_obstacles"] = run_without_obstacles(
+                planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"],
+                continue_on_block=args.continue_on_block, stop_on_error=not args.keep_going,
+            )  # fmt: skip
         stem = os.path.splitext(os.path.basename(path))[0]
         to_file = args.out is not None and args.out.endswith(".json") and len(args.scenarios) == 1
         out = args.out if to_file else os.path.join(args.out or "output/world_sim", f"{stem}.json")

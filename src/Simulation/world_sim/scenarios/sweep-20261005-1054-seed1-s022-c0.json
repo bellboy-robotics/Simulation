@@ -1,0 +1,131 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    -20,
+    332,
+    0
+   ],
+   "end_mm": [
+    -20,
+    332,
+    1150
+   ],
+   "radius_mm": 28,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    171,
+    215
+   ],
+   "top_height_mm": 529,
+   "size_mm": [
+    596,
+    449,
+    40
+   ],
+   "yaw_deg": 129,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "wall",
+   "start_xy_mm": [
+    -167,
+    -762
+   ],
+   "end_xy_mm": [
+    205,
+    -536
+   ],
+   "height_mm": 858,
+   "thickness_mm": 58,
+   "name": "random wall 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s022 cmd 0 pose: ik_miss",
+ "start_joints_deg": [
+  89.8,
+  -1.2,
+  -78.5,
+  -56.7,
+  70.2,
+  176.8
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -601.1,
+    -668.7,
+    135.3,
+    1.0873,
+    -1.7585,
+    0.0166
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "ik_miss"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0.08192181587219238,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -131.7,
+   64.5,
+   -129.8,
+   -72.3,
+   14.4,
+   48.3
+  ],
+  "pose_error_mm_deg": [
+   968.4004541626449,
+   60.08147885274659
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   117.46172745880907,
+   -0.7624373684624215,
+   -51.10674020045867,
+   8.55988249712606,
+   93.69238227921954,
+   198.17568480549386
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s022",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

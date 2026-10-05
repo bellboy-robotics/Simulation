@@ -1,0 +1,133 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    461,
+    13,
+    0
+   ],
+   "end_mm": [
+    461,
+    13,
+    869
+   ],
+   "radius_mm": 58,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    521,
+    57,
+    936
+   ],
+   "radius_mm": 59,
+   "name": "random sphere 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s097 cmd 1 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  -144.349,
+  -39.768,
+  -32.957,
+  -85.756,
+  -32.699,
+  59.157
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    38.2,
+    58.6,
+    -156.2,
+    -106.0,
+    11.6,
+    -15.3
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 1 would turn 164deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 3.3496358394622803,
+   "max_batch_s": null,
+   "before_motion_s": 3.3496358394622803,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   38.2,
+   58.6,
+   -156.2,
+   -106.0,
+   11.6,
+   -15.3
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -144.35,
+    -39.77,
+    -32.96,
+    -85.76,
+    -32.7,
+    59.16
+   ],
+   [
+    29.16,
+    34.0,
+    -143.66,
+    -110.68,
+    11.37,
+    20.06
+   ],
+   [
+    38.2,
+    58.6,
+    -156.2,
+    -106.0,
+    11.6,
+    -15.3
+   ]
+  ],
+  "end_joints_deg": [
+   6.116880071589762,
+   26.635533319495106,
+   -137.350145491619,
+   -205.4890005762583,
+   -10.970914514704818,
+   135.16008631538944
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s097",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

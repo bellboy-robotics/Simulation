@@ -21,7 +21,7 @@ from typing import Callable
 
 from Simulation.world_sim import robot
 from Simulation.world_sim.analysis import Run, load_run
-from Simulation.world_sim.report import playback_estimate, write_report
+from Simulation.world_sim.report import command_times, write_report
 
 RUNS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "output", "world_sim", "runs"))
 LOCAL = "local"  # target name of this machine
@@ -41,7 +41,7 @@ def start_run(
     scenario: The scenario as edited on the page.
     file: Its file name (names the run); "" for an unsaved scenario.
     note: Free text saying what this run tests.
-    flags: {"keep_going": bool, "continue_on_block": bool}, the plan.py flags.
+    flags: {"keep_going", "continue_on_block", "compare_no_obstacles"}: bools, the plan.py flags (--keep-going, ...).
     targets: LOCAL and/or ssh destinations like bellboy@billie-29.bellboy.
     robot_checkout: billie-onboard checkout on the robots for the planner code ("" = local code).
     plan_locally: (scenario, flags) -> plan results dict, run with this machine's planner.
@@ -128,24 +128,27 @@ def _run_target(meta: dict, name: str, plan_locally: Callable[[dict, dict], dict
 
 
 def timing_summary(run: Run) -> dict:
-    """Outcome and planner time of a run, per command and in total, for comparing machines.
+    """Outcome and planner time of a run, per command and in total, with and without obstacles.
 
     run: The planned run.
     Returns: {"host", "devices", "build_s" (planner build or cache load), "planner_s" (all planner calls),
-        "estimate_s" (robot time estimate), "failed", "commands": per command {"cmd", "ok", "planner_s",
-        "estimate_s": replay wall time with the BufferingPlayer for replays, else the planning time}}.
+        "estimate_s" (robot time estimate, see report.command_times), "failed", the same three with a
+        "free_" prefix for the run without obstacles (None if it was not planned), and "commands": per
+        command {"cmd", "ok", "planner_s", "estimate_s", "free_ok", "free_planner_s", "free_estimate_s"}}.
     """
+    free = run.no_obstacles
     commands = []
     for c, outcome in enumerate(run.commands):
-        calls = [t for t in run.timings if t["command"] == c]
-        planner_s = sum(t["seconds"] for t in calls)
-        batches = [t for t in calls if t["call"] == "batch_solve"]
-        estimate_s = planner_s
-        if batches:
-            wall, _ = playback_estimate([t["seconds"] for t in batches], [t["n"] for t in batches])
-            estimate_s = sum(t["seconds"] for t in calls if t["call"] in ("detour", "transit")) + wall
-        commands.append({"cmd": outcome["spec"]["cmd"], "ok": outcome["ok"], "planner_s": round(planner_s, 3),
-                         "estimate_s": round(estimate_s, 3)})  # fmt: skip
+        planner_s, estimate_s = command_times(run.timings, c)
+        row = {"cmd": outcome["spec"]["cmd"], "ok": outcome["ok"], "planner_s": round(planner_s, 3),
+               "estimate_s": round(estimate_s, 3), "free_ok": None, "free_planner_s": None, "free_estimate_s": None}
+        if free is not None and c < len(free["commands"]):
+            free_planner_s, free_estimate_s = command_times(free["timings"], c)
+            row.update(free_ok=free["commands"][c]["ok"], free_planner_s=round(free_planner_s, 3),
+                       free_estimate_s=round(free_estimate_s, 3))
+        commands.append(row)
+    free_planner_s = None if free is None else round(sum(c["free_planner_s"] or 0.0 for c in commands), 3)
+    free_estimate_s = None if free is None else round(sum(c["free_estimate_s"] or 0.0 for c in commands), 3)
     return {
         "host": run.machine.get("host", "?"),
         "devices": ", ".join(run.machine.get("jax_devices", [])),
@@ -153,6 +156,9 @@ def timing_summary(run: Run) -> dict:
         "planner_s": round(sum(c["planner_s"] for c in commands), 3),
         "estimate_s": round(sum(c["estimate_s"] for c in commands), 3),
         "failed": sum(not c["ok"] for c in commands),
+        "free_planner_s": free_planner_s,
+        "free_estimate_s": free_estimate_s,
+        "free_failed": None if free is None else sum(not c["ok"] for c in free["commands"]),
         "commands": commands,
     }
 
@@ -199,12 +205,39 @@ def delete_run(run_id: str) -> None:
         write_index()
 
 
+def delete_finished_runs() -> list[str]:
+    """Removes every run whose machines all finished (runs still going on stay) and rewrites the index.
+
+    Returns: The deleted run ids.
+    """
+    deleted = []
+    for meta in list_runs():
+        if all(t["status"] in ("done", "failed") for t in meta["targets"].values()):
+            delete_run(meta["id"])
+            deleted.append(meta["id"])
+    if not deleted:
+        with _lock:
+            write_index()
+    return deleted
+
+
 def results_path(run_id: str, name: str) -> str:
     """Results file of one machine of a run.
 
     run_id: The run id. name: The machine's target name. Returns: The path (may not exist yet).
     """
     return os.path.join(RUNS_DIR, os.path.basename(run_id), f"{os.path.basename(name)}.json")
+
+
+def _time_cell(row: dict) -> str:
+    """One command's times on one machine, for the index table.
+
+    row: A timing_summary command row. Returns: HTML: planner / estimate, then the same without obstacles.
+    """
+    text = f"{row['planner_s']:.2f}s / {row['estimate_s']:.2f}s{'' if row['ok'] else ' ✗'}"
+    if row.get("free_planner_s") is not None:
+        text += f"<br><small>no obstacles {row['free_planner_s']:.2f}s / {row['free_estimate_s']:.2f}s{'' if row['free_ok'] else ' ✗'}</small>"
+    return text
 
 
 def write_index() -> None:
@@ -217,7 +250,8 @@ def write_index() -> None:
             if t["status"] == "done":
                 link = f'<a href="{meta["id"]}/{name}.html">report</a>'
                 state = "✓" if not s["failed"] else f'<span class="bad">{s["failed"]} failed</span>'
-                cells.append(f"<b>{name}</b> {state} · planner {s['planner_s']:.1f}s · estimate {s['estimate_s']:.1f}s · {link}")
+                free = "" if s.get("free_planner_s") is None else f" · without obstacles {s['free_planner_s']:.1f}s"
+                cells.append(f"<b>{name}</b> {state} · planner {s['planner_s']:.1f}s · estimate {s['estimate_s']:.1f}s{free} · {link}")
             else:
                 cells.append(f"<b>{name}</b> {html.escape(t['status'])} {html.escape(t['error'] or '')}")
         done = [n for n in names if meta["targets"][n]["status"] == "done"]
@@ -229,8 +263,7 @@ def write_index() -> None:
             for c in range(n_commands):
                 per = [meta["targets"][n]["summary"]["commands"] for n in done]
                 cmd = next(p[c]["cmd"] for p in per if c < len(p))
-                tds = "".join(f"<td>{p[c]['planner_s']:.2f}s / {p[c]['estimate_s']:.2f}s{'' if p[c]['ok'] else ' ✗'}</td>"
-                              if c < len(p) else "<td>—</td>" for p in per)  # fmt: skip
+                tds = "".join(f"<td>{_time_cell(p[c])}</td>" if c < len(p) else "<td>—</td>" for p in per)
                 lines.append(f"<tr><td>{c + 1}. {cmd}</td>{tds}</tr>")
             builds = "".join(f"<td>{meta['targets'][n]['summary']['build_s']:.1f}s</td>" for n in done)
             detail = (f"<details><summary>timing per command</summary><table><tr><th>command</th>{head}</tr>"

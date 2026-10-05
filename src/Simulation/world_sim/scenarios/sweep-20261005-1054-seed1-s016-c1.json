@@ -1,0 +1,133 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    290,
+    228,
+    0
+   ],
+   "end_mm": [
+    290,
+    228,
+    1286
+   ],
+   "radius_mm": 29,
+   "name": "random capsule 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    -69,
+    670,
+    617
+   ],
+   "radius_mm": 68,
+   "name": "random sphere 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s016 cmd 1 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  2.736,
+  56.092,
+  -116.242,
+  -156.161,
+  22.323,
+  -136.747
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    27.9,
+    -70.2,
+    -156.7,
+    -50.2,
+    -50.5,
+    142.0
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 4 would turn 100deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 10.997348546981812,
+   "max_batch_s": null,
+   "before_motion_s": 10.997348546981812,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   27.9,
+   -70.2,
+   -156.7,
+   -50.2,
+   -50.5,
+   142.0
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    2.74,
+    56.09,
+    -116.24,
+    -156.16,
+    22.32,
+    -136.75
+   ],
+   [
+    8.14,
+    5.1,
+    -131.55,
+    -113.64,
+    5.26,
+    -28.0
+   ],
+   [
+    27.9,
+    -70.2,
+    -156.7,
+    -50.2,
+    -50.5,
+    142.0
+   ]
+  ],
+  "end_joints_deg": [
+   25.567797167303695,
+   -3.3440618982987123,
+   -127.29631193903532,
+   -151.70053686235588,
+   7.765209623988939,
+   -58.49731224092512
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s016",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

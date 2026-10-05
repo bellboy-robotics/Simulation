@@ -1,0 +1,93 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    199,
+    -205,
+    889
+   ],
+   "radius_mm": 73,
+   "name": "random sphere 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s090 cmd 1 pose: ik_miss",
+ "start_joints_deg": [
+  -284.678,
+  12.054,
+  -108.414,
+  185.141,
+  49.468,
+  -126.785
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    337.0,
+    -376.0,
+    893.2,
+    0.2856,
+    0.2138,
+    0.811
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "ik_miss"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0.04326939582824707,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   124.5,
+   -95.2,
+   -81.6,
+   24.4,
+   -23.3,
+   78.2
+  ],
+  "pose_error_mm_deg": [
+   5.737928399247406,
+   2.5979568369793475
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -226.9103589456292,
+   -97.87491691936856,
+   -96.87148016802365,
+   221.1817700057128,
+   9.528883995996706,
+   -127.98967176244
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s090",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

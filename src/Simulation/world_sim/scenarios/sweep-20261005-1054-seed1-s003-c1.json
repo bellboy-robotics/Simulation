@@ -1,0 +1,96 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -231,
+    392
+   ],
+   "top_height_mm": 684,
+   "size_mm": [
+    608,
+    340,
+    38
+   ],
+   "yaw_deg": 203,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s003 cmd 1 joints: untestable_start, slow_single_move",
+ "start_joints_deg": [
+  -179.252,
+  -116.9,
+  -148.075,
+  193.52,
+  79.579,
+  -9.953
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    57.1,
+    -43.3,
+    -59.8,
+    60.8,
+    35.1,
+    -92.6
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "untestable_start",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 1 would turn 130deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 5.245121955871582,
+   "max_batch_s": null,
+   "before_motion_s": 5.245121955871582,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   57.1,
+   -43.3,
+   -59.8,
+   60.8,
+   35.1,
+   -92.6
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "start_invalid",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -72.99561818832778,
+   -78.21492090297137,
+   -67.27943970213327,
+   128.89270473298572,
+   127.8579037529721,
+   -64.84786503685206
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s003",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

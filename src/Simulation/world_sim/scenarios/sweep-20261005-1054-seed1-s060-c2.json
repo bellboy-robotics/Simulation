@@ -1,0 +1,136 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path capsule",
+   "role": "avoid",
+   "type": "capsule",
+   "start_mm": [
+    -340,
+    -53,
+    -440
+   ],
+   "end_mm": [
+    -340,
+    -53,
+    383
+   ],
+   "radius_mm": 57
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    297,
+    390,
+    0
+   ],
+   "end_mm": [
+    297,
+    390,
+    984
+   ],
+   "radius_mm": 55,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s060 cmd 2 joints: solver_miss",
+ "start_joints_deg": [
+  -0.8,
+  53.4,
+  -137.2,
+  90.4,
+  84.1,
+  31.7
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    50.3,
+    -4.7,
+    -67.4,
+    141.8,
+    -63.7,
+    -127.6
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss"
+  ],
+  "error": "Arm move blocked: no detour found around the obstacle (link_gripper_and_camera would still go 79mm in).",
+  "timing": {
+   "planner_s": 1.1876249313354492,
+   "max_batch_s": null,
+   "before_motion_s": 1.1876249313354492,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   50.3,
+   -4.7,
+   -67.4,
+   141.8,
+   -63.7,
+   -127.6
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -0.8,
+    53.4,
+    -137.2,
+    90.4,
+    84.1,
+    31.7
+   ],
+   [
+    20.71,
+    25.78,
+    -102.64,
+    112.2,
+    8.6,
+    -58.3
+   ],
+   [
+    50.3,
+    -4.7,
+    -67.4,
+    141.8,
+    -63.7,
+    -127.6
+   ]
+  ],
+  "end_joints_deg": [
+   -0.8,
+   53.4,
+   -137.2,
+   90.4,
+   84.1,
+   31.7
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s060",
+   "command": 2
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

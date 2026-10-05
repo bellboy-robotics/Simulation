@@ -1,0 +1,132 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path capsule",
+   "role": "avoid",
+   "type": "capsule",
+   "start_mm": [
+    -340,
+    -53,
+    -440
+   ],
+   "end_mm": [
+    -340,
+    -53,
+    383
+   ],
+   "radius_mm": 57
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    297,
+    390,
+    0
+   ],
+   "end_mm": [
+    297,
+    390,
+    984
+   ],
+   "radius_mm": 55,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s060 cmd 1 replay_policy: solver_miss, slow_replay_start",
+ "start_joints_deg": [
+  -0.8,
+  53.4,
+  -137.2,
+  90.4,
+  84.1,
+  31.7
+ ],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-unknown-20260511-074318-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_replay_start"
+  ],
+  "error": "Arm move blocked: no detour found around the obstacle (link4 would still go 93mm in).",
+  "timing": {
+   "planner_s": 11.632129669189453,
+   "max_batch_s": null,
+   "before_motion_s": 11.632129669189453,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   195.98,
+   -22.79,
+   -151.72,
+   -12.19,
+   -95.09,
+   357.99
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    -0.8,
+    53.4,
+    -137.2,
+    90.4,
+    84.1,
+    31.7
+   ],
+   [
+    12.54,
+    35.57,
+    -143.13,
+    69.96,
+    69.8,
+    50.97
+   ],
+   [
+    195.98,
+    -22.79,
+    -151.72,
+    -12.19,
+    -95.09,
+    357.99
+   ]
+  ],
+  "end_joints_deg": [
+   -0.8,
+   53.4,
+   -137.2,
+   90.4,
+   84.1,
+   31.7
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s060",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

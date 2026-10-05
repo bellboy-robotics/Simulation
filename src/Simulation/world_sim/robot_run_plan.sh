@@ -28,4 +28,5 @@ export PYTHONPATH="$DIR/src:$DIR/billie/nodes/pyroki-planner:$DIR/billie/billie-
 export PYROKI_JAX_CACHE_DIR="$DIR/jax-cache"
 export WORLD_SIM_RECORDINGS="$DIR/recordings"
 cd "$DIR"
-exec /app/nodes/pyroki-planner/.venv/bin/python -m Simulation.world_sim.plan "$@"
+# WORLD_SIM_MODULE (docker exec -e) picks another entry point, e.g. Simulation.world_sim.sweep.
+exec /app/nodes/pyroki-planner/.venv/bin/python -m "${WORLD_SIM_MODULE:-Simulation.world_sim.plan}" "$@"

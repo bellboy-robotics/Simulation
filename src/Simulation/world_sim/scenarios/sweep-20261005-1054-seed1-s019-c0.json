@@ -1,0 +1,138 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    463,
+    -159
+   ],
+   "top_height_mm": 798,
+   "size_mm": [
+    463,
+    363,
+    27
+   ],
+   "yaw_deg": 85,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    268,
+    -421
+   ],
+   "top_height_mm": 799,
+   "size_mm": [
+    334,
+    262,
+    36
+   ],
+   "yaw_deg": 40,
+   "name": "random table 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s019 cmd 0 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  60.6,
+  -10.3,
+  -119.8,
+  -169.7,
+  66.7,
+  -153.9
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -122.2,
+    75.2,
+    -114.5,
+    14.1,
+    -23.9,
+    -168.5
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: joint 1 would turn 137deg in a single step of a trajectory (more than 90deg), which spins the arm without helping it clear the obstacle.",
+  "timing": {
+   "planner_s": 9.790526628494263,
+   "max_batch_s": null,
+   "before_motion_s": 9.790526628494263,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -122.2,
+   75.2,
+   -114.5,
+   14.1,
+   -23.9,
+   -168.5
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    60.6,
+    -10.3,
+    -119.8,
+    -169.7,
+    66.7,
+    -153.9
+   ],
+   [
+    -75.5,
+    50.23,
+    -125.94,
+    -26.64,
+    6.4,
+    -160.57
+   ],
+   [
+    -122.2,
+    75.2,
+    -114.5,
+    14.1,
+    -23.9,
+    -168.5
+   ]
+  ],
+  "end_joints_deg": [
+   -60.897604639807675,
+   49.643577076458534,
+   -133.9136450937538,
+   -55.76115553489093,
+   55.05949361655011,
+   -167.86878308069163
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s019",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

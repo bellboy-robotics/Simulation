@@ -15,6 +15,8 @@ python -m Simulation.world_sim.view output/world_sim/post_across_path.json
 
 `plan` flags: `--keep-going` runs the remaining commands after one fails (a brain script would stop),
 `--continue-on-block` plays moves the arm-move guard refuses, marked with an X, to see the whole path.
+`--compare-no-obstacles` also plans every command without the avoid objects. The result goes in
+`results["no_obstacles"]`, and the report adds a "without obstacles" column.
 
 ## Editor
 
@@ -47,6 +49,13 @@ A browser page to build scenarios and run them:
   (a checkout on the robot; empty = this Mac's billie-onboard). Each machine shows its stage and log
   line live. When they finish you get ▶ play, its report and a per-command table: planner seconds /
   robot time estimate, plus the planner build.
+  "Also plan without obstacles" (on by default) plans every command a second time with the avoid
+  objects removed. It uses the same planner in the same process, so there is no second build. The
+  table shows those times in grey under each cell. The difference is what the obstacles cost:
+  detours, transits, reroutes and the solver's extra work. A command that fails with obstacles
+  stops early, so compare its row with care.
+  **Reset** puts the arm back at the start joints and clears the last run's results from the page.
+  History keeps them. Run also clears the old results before it starts.
 - **History**: every Run is kept in `output/world_sim/runs/<time>_<file>/` with the scenario as it
   ran, then per machine its results (`local.json`, `billie-29.json`, ...) and report. A run also keeps
   the note typed before Run. Click a run to see its machines and timing, play one (this loads that
@@ -133,3 +142,44 @@ The report's "Planner timing" table shows, for each command:
   shows as wall time above the playback time.
 
 The first run on a robot includes the JAX compile. Later runs load it from the cache.
+
+## Finding problems: random sweeps
+
+```bash
+python -m Simulation.world_sim.sweep generate --count 100 --seed 1        # here: random scenarios
+python -m Simulation.world_sim.sweep robot output/world_sim/sweeps/<id>   # plan on billie-29, fetch, summarize
+open output/world_sim/sweeps/<id>/index.html
+```
+
+`generate` writes 100 scenarios with Billie's start joints, 1–3 random objects and 2–3 `joints` /
+`pose` moves. About 15% also replay a cached recording with an obstacle placed across the middle of
+its path, clear of its first and last frames. Every target is a valid configuration: inside the
+limits, at least 2cm from the objects, above the floor, and clear of Billie's body and the arm itself
+by the planner's own self-collision model. So every command has a solution.
+
+`robot` syncs like `robot.py`, starts the sweep detached on the robot (`sweep_check.py`, so a dropped
+ssh doesn't stop it), polls, fetches, and runs `summarize`. `run <folder>` runs it on this machine
+instead; failure results are the same, but the timings are CPU timings.
+
+Each command is flagged with ([sweep_check.py](sweep_check.py)):
+
+| Kind | Flag | Meaning |
+|---|---|---|
+| 1 — planner miss | `solver_miss` | The command failed, but [oracle.py](oracle.py) (RRT-Connect with the guard's rules, self-collision and floor) finds a collision-free path from its start to its goal |
+| | `ik_miss` | `pose` landed more than 5mm / 3° from a target its goal configuration reaches |
+| | `end_state_invalid` | The arm ended in self-collision, inside an obstacle or below the floor |
+| 2 — time | `replay_stall` | A replay batch took longer than its 1.0s of playback |
+| | `slow_single_move` | More than 2s of planning for a `joints` / `pose` (detours) |
+| | `slow_replay_start` | More than 2s of planning before a replay moves (detour to frame 0, reroute) |
+| | `recompile` | More than 0.5s of JAX compiles inside one command (from JAX's compile log) |
+| Probably no solution | `no_path_found` | Failed, and the oracle found no path either |
+| Not judged | `goal_invalid`, `untestable_start` | The goal is invalid on the robot's arm, or the command started from an invalid state |
+
+Every flagged command becomes a repro scenario, `flagged/<scenario>-c<k>.json`. It contains:
+- the same world, the arm's joints right before the command, and only that command;
+- a `flag` block: the problems, the error, timings, the goal joints, and the oracle path for solver misses.
+
+The repro is run again right away, and the flag records whether it `reproduced`. `summarize` copies
+the repros into `scenarios/` as `<sweep id>-<scenario>-c<k>.json`, so the editor lists them. It also
+writes a report per flagged scenario and `index.html`: problems grouped by kind, and time
+percentiles per command type. The planner build time (compile, or cache load) is in the page header.

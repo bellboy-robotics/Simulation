@@ -1,0 +1,168 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path sphere",
+   "role": "avoid",
+   "type": "sphere",
+   "center_mm": [
+    -506,
+    -274,
+    1048
+   ],
+   "radius_mm": 89
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "wall",
+   "start_xy_mm": [
+    411,
+    162
+   ],
+   "end_xy_mm": [
+    109,
+    754
+   ],
+   "height_mm": 1137,
+   "thickness_mm": 69,
+   "name": "random wall 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    3,
+    375,
+    592
+   ],
+   "radius_mm": 95,
+   "name": "random sphere 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    78,
+    471
+   ],
+   "top_height_mm": 889,
+   "size_mm": [
+    516,
+    232,
+    33
+   ],
+   "yaw_deg": 132,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s005 cmd 0 joints: solver_miss, slow_single_move",
+ "start_joints_deg": [
+  129.5,
+  46.4,
+  -112.7,
+  -25.0,
+  63.0,
+  -146.2
+ ],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    -146.0,
+    64.9,
+    -108.0,
+    59.2,
+    30.2,
+    -22.2
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "solver_miss",
+   "slow_single_move"
+  ],
+  "error": "Arm move blocked: no detour found around the obstacle (link_gripper_and_camera would still go 130mm in).",
+  "timing": {
+   "planner_s": 10.757961988449097,
+   "max_batch_s": null,
+   "before_motion_s": 10.757961988449097,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -146.0,
+   64.9,
+   -108.0,
+   59.2,
+   30.2,
+   -22.2
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": "found",
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": [
+   [
+    129.5,
+    46.4,
+    -112.7,
+    -25.0,
+    63.0,
+    -146.2
+   ],
+   [
+    111.43,
+    -3.32,
+    -90.59,
+    4.99,
+    64.84,
+    36.47
+   ],
+   [
+    -10.91,
+    -20.01,
+    -111.42,
+    62.8,
+    54.55,
+    24.25
+   ],
+   [
+    -146.0,
+    64.9,
+    -108.0,
+    59.2,
+    30.2,
+    -22.2
+   ]
+  ],
+  "end_joints_deg": [
+   129.5,
+   46.4,
+   -112.7,
+   -25.0,
+   63.0,
+   -146.2
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s005",
+   "command": 0
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

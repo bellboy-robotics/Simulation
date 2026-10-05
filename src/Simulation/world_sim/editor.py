@@ -5,7 +5,8 @@ poses to test, and run them through the planner.
 
 The page (editor.html) is served by this process, which reuses the plan and view steps:
 - Billie is drawn from the planner's merged URDF; clearance comes from the planner's collision model
-  (cached in output/world_sim/arm_model.json after the first build, so editing works while it compiles);
+  (cached in output/world_sim/arm_model.json after the first build, so editing works while it compiles)
+  and from the URDF's real collision meshes (mesh_check.py), which the capsules do not always cover;
 - objects are drawn from world.object_capsules, so the page shows the capsules the planner gets;
 - Run plans the edited scenario on this machine and/or robots over ssh (runs.py), archives each
   run's results and reports in output/world_sim/runs/ and plays the path on the page;
@@ -35,6 +36,7 @@ from scipy.spatial.transform import Rotation
 
 from Simulation.world_sim import robot, runs
 from Simulation.world_sim.analysis import Run, dense_path, link_distances, load_run
+from Simulation.world_sim.mesh_check import link_mesh_distances, urdf_path
 from Simulation.world_sim.randomize import random_motions, random_objects
 from Simulation.world_sim.world import object_capsules, scenario_from_data
 
@@ -125,19 +127,6 @@ def _cached_model() -> CollisionModel | None:
         if isinstance(data, dict) and "model_json" in data:
             return CollisionModel.from_json(data["model_json"])
     return None
-
-
-def urdf_path() -> str:
-    """The planner's merged URDF (base + arm + gripper + TCP), generated if this machine has none yet.
-
-    Returns: Path of /tmp/urdf/<XARM_SN>-with-tcp.urdf; its root link is the xArm base frame.
-    """
-    path = f"/tmp/urdf/{os.environ['XARM_SN']}-with-tcp.urdf"
-    if not os.path.exists(path):
-        from pyroki_planner.urdf import load_urdf  # noqa: PLC0415
-
-        load_urdf()
-    return path
 
 
 def joint_limits_deg() -> list[list[float]]:
@@ -260,29 +249,92 @@ def world_view(state: EditorState, data: dict) -> dict:
     return {"objects": objects, "avoid_capsules": n_avoid, "max_capsules": MAX_WORLD_CAPSULES}
 
 
+def mesh_clearance(model: CollisionModel, joints_deg: np.ndarray, objects: list[tuple]) -> tuple[np.ndarray, np.ndarray]:
+    """Distance from every link's real collision mesh to the nearest avoid object (see mesh_check).
+
+    model: Arm model posing the meshes (the editor's, or a run's).
+    joints_deg: (S, 6) configurations, degrees.
+    objects: Avoid objects as (name, starts_m (M, 3), ends_m (M, 3), radii_m (M,)).
+    Returns: ((S, L) mm, +inf for links without a mesh or no objects; (S, L) index into objects of the
+        nearest one, -1 for none).
+    """
+    joints = np.atleast_2d(joints_deg)
+    per_object = [link_mesh_distances(model, joints, *o[1:]) * 1000.0 for o in objects if len(o[3])]
+    if not per_object:
+        shape = (len(joints), len(model.link_names))
+        return np.full(shape, np.inf), np.full(shape, -1)
+    index = [i for i, o in enumerate(objects) if len(o[3])]
+    stacked = np.stack(per_object)  # (O, S, L)
+    nearest = np.asarray(index)[stacked.argmin(axis=0)]
+    distance = stacked.min(axis=0)
+    return distance, np.where(np.isfinite(distance), nearest, -1)
+
+
+def clearance_summary(model: CollisionModel, capsule_mm: np.ndarray, mesh_mm: np.ndarray, mesh_object: np.ndarray,
+                      names: list[str]) -> list[dict]:  # fmt: skip
+    """Per configuration, the closest link by planner capsule and by real mesh, for the page's labels.
+
+    model: The arm model (link names). capsule_mm, mesh_mm: (S, L) distances, +inf for none.
+    mesh_object: (S, L) nearest object index per link for the mesh distances, -1 for none.
+    names: Object names, indexed by mesh_object.
+    Returns: (S,) {"capsule_mm", "capsule_link": closest by capsule; "mesh_mm", "mesh_link", "mesh_object":
+        closest by real mesh and its object; "mesh_link_capsule_mm": that link's capsule distance}; numbers
+        rounded to 0.1mm, null when there is no distance.
+    """
+    out = []
+    for capsule, mesh, obj in zip(capsule_mm, mesh_mm, mesh_object):
+        c, m = int(np.argmin(capsule)), int(np.argmin(mesh))
+        out.append({"capsule_mm": _mm(capsule[c]), "capsule_link": model.link_names[c], "mesh_mm": _mm(mesh[m]),
+                    "mesh_link": model.link_names[m], "mesh_object": names[obj[m]] if obj[m] >= 0 else None,
+                    "mesh_link_capsule_mm": _mm(capsule[m])})  # fmt: skip
+    return out
+
+
+def _mm(value: float) -> float | None:
+    """A distance for the page.
+
+    value: mm, +inf for no distance. Returns: Rounded to 0.1mm, None for no distance.
+    """
+    return round(float(value), 1) if np.isfinite(value) else None
+
+
+def _mm_rows(values: np.ndarray) -> list[list[float | None]]:
+    """(S, L) distances in mm as JSON rows.
+
+    values: (S, L) mm, +inf for no distance. Returns: Rows of _mm values.
+    """
+    return [[_mm(c) for c in row] for row in values]
+
+
 def forward_kinematics(state: EditorState, body: dict) -> dict:
     """The arm at given joints, and how close each link is to the scenario's avoid objects.
 
     state: The editor state.
     body: {"joints": (S, 6) degrees, "scenario": the edited scenario, optional (no clearance without it)}.
-    Returns: {"poses": (S, L, 7) see arm_poses, "tcp": (S, 6) TCP poses, "clearance_mm": (S, L) distance
-        to the nearest avoid object (negative inside, null for static links or no objects), "error"}.
+    Returns: {"poses": (S, L, 7) see arm_poses, "tcp": (S, 6) TCP poses, "clearance_mm": (S, L) planner
+        capsule distance to the nearest avoid object (negative inside, null for static links or no objects),
+        "mesh_clearance_mm": (S, L) the same for the real collision meshes, "summary": (S,) see
+        clearance_summary, "error"}.
     """
     model = state.require_model()
     joints = np.asarray(body["joints"], dtype=np.float64).reshape(-1, 6)
     poses, tcp = arm_poses(model, joints)
-    clearance = np.full(poses.shape[:2], np.inf)
-    error = None
+    clearance = mesh = np.full(poses.shape[:2], np.inf)
+    objects, error = [], None
     try:
         if body.get("scenario") is not None:
-            starts, ends, radii = scenario_from_data(body["scenario"], "editor")["world"].capsules("avoid")
+            world = scenario_from_data(body["scenario"], "editor")["world"]
+            starts, ends, radii = world.capsules("avoid")
             if len(radii):
-                clearance = link_obstacle_distances(model, np.deg2rad(joints), starts, ends, radii).min(axis=2) * 1000.0
+                clearance = link_obstacle_distances(model, np.deg2rad(joints), starts, ends, radii).min(axis=2)
+            objects = [(o.name, o.starts_m, o.ends_m, o.radii_m) for o in world.objects if o.role == "avoid"]
     except (KeyError, ValueError, TypeError, AssertionError) as e:
         error = f"{type(e).__name__}: {e}"
-    clearance = np.where(model.movable_links[None], clearance, np.inf)
-    rows = [[round(float(c), 1) if np.isfinite(c) else None for c in row] for row in clearance]
-    return {"poses": poses, "tcp": tcp.round(_DECIMALS), "clearance_mm": rows, "error": error}
+    clearance = np.where(model.movable_links[None], clearance, np.inf) * 1000.0
+    mesh, mesh_object = mesh_clearance(model, joints, objects)
+    return {"poses": poses, "tcp": tcp.round(_DECIMALS), "clearance_mm": _mm_rows(clearance), "mesh_clearance_mm": _mm_rows(mesh),
+            "summary": clearance_summary(model, clearance, mesh, mesh_object, [o[0] for o in objects]),
+            "error": error}  # fmt: skip
 
 
 def solve_ik(state: EditorState, body: dict) -> dict:
@@ -307,19 +359,21 @@ def plan_locally(state: EditorState, scenario_data: dict, flags: dict) -> dict:
     """Plans a scenario with this machine's planner, like plan.py.
 
     state: The editor state.
-    scenario_data: The scenario JSON. flags: {"keep_going", "continue_on_block"}, the plan.py flags.
-    Returns: The plan results (plan.run_scenario's dict plus "name").
+    scenario_data: The scenario JSON.
+    flags: {"keep_going", "continue_on_block", "compare_no_obstacles"}, the plan.py flags.
+    Returns: The plan results (plan.run_scenario's dict plus "name", and "no_obstacles" when compared).
     Raises: RuntimeError while the planner is not ready.
     """
     planner = state.require_planner()
-    from Simulation.world_sim.plan import run_scenario  # noqa: PLC0415 (imports JAX)
+    from Simulation.world_sim.plan import run_scenario, run_without_obstacles  # noqa: PLC0415 (imports JAX)
 
     scenario = scenario_from_data(scenario_data, "editor")
+    args = (planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"])
+    options = {"continue_on_block": bool(flags.get("continue_on_block")), "stop_on_error": not flags.get("keep_going")}
     with state.lock:
-        results = run_scenario(
-            planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"],
-            continue_on_block=bool(flags.get("continue_on_block")), stop_on_error=not flags.get("keep_going"),
-        )  # fmt: skip
+        results = run_scenario(*args, **options)
+        if flags.get("compare_no_obstacles"):
+            results["no_obstacles"] = run_without_obstacles(*args, **options)
     results["name"] = scenario["name"]
     return results
 
@@ -328,13 +382,14 @@ def start_run(state: EditorState, body: dict) -> dict:
     """Starts a run of the edited scenario on the chosen machines (see runs.py).
 
     state: The editor state.
-    body: {"scenario", "file", "note", "keep_going", "continue_on_block", "targets": "local" and/or ssh
+    body: {"scenario", "file", "note", "keep_going", "continue_on_block", "compare_no_obstacles" (also plan
+        without the avoid objects), "targets": "local" and/or ssh
         destinations, "robot_checkout": billie-onboard checkout on the robots ("" = local code)}.
     Returns: The run's meta; poll it with GET /api/run?id=.
     """
     if not body.get("targets"):
         raise ValueError("Choose at least one machine to run on")
-    flags = {k: bool(body.get(k)) for k in ("keep_going", "continue_on_block")}
+    flags = {k: bool(body.get(k)) for k in ("keep_going", "continue_on_block", "compare_no_obstacles")}
     return runs.start_run(body["scenario"], body.get("file", ""), body.get("note", ""), flags, body["targets"],
                           body.get("robot_checkout", robot.DEFAULT_ROBOT_CHECKOUT),
                           lambda data, f: plan_locally(state, data, f))  # fmt: skip
@@ -367,6 +422,14 @@ def delete_run(state: EditorState, body: dict) -> dict:
     return {"deleted": body["id"]}
 
 
+def clean_history(state: EditorState, _body: dict) -> dict:
+    """Deletes every finished run from the archive (History's Clean).
+
+    state, _body: Unused. Returns: {"deleted": the deleted run ids}.
+    """
+    return {"deleted": runs.delete_finished_runs()}
+
+
 def run_playback(state: EditorState, query: dict) -> dict:
     """The arm path of one machine of a run, for the page's player.
 
@@ -397,19 +460,26 @@ def playback(run: Run) -> dict:
     """The run's arm path sampled for the page's player, with each link's clearance state.
 
     run: The planned run.
-    Returns: {"joints_deg": (S, 6) the arm's joints, "poses": (S, L, 7) capsule poses (see arm_poses), "link_state": (S, L) 0 clear / 1 inside the planner
-        margin / 2 inside an avoid object, "tcp_mm": (S, 3), "owner": (S,) target index per sample
-        (-1 = start), "targets": per target {"command", "kind", "blocked"}, "commands": per command
-        {"cmd", "ok", "error", "seconds"}, "events": operator messages}.
+    Returns: {"joints_deg": (S, 6) the arm's joints, "poses": (S, L, 7) capsule poses (see arm_poses),
+        "capsules": per link {"radius", "height"} of the run's model (m), "link_state": (S, L) 0 clear /
+        1 inside the planner margin / 2 inside an avoid object, the worse of the planner capsule and the
+        real mesh (mesh_check), "summary": (S,) see clearance_summary, "tcp_mm": (S, 3), "owner": (S,)
+        target index per sample (-1 = start), "targets": per target {"command", "kind", "blocked"},
+        "commands": per command {"cmd", "ok", "error", "seconds"}, "events": operator messages}.
     """
     samples, owner = dense_path(run)
-    distance = link_distances(run, samples, "avoid")
-    link_state = np.where(distance < 0, 2, np.where(distance < WORLD_COL_MARGIN_M, 1, 0))
+    distance = link_distances(run, samples, "avoid") * 1000.0
+    avoid = [(o["name"], o["starts_m"], o["ends_m"], o["radii_m"]) for o in run.objects if o["role"] == "avoid"]
+    mesh, mesh_object = mesh_clearance(run.model, samples, avoid)
+    worst = np.minimum(distance, mesh)
+    link_state = np.where(worst < 0, 2, np.where(worst < WORLD_COL_MARGIN_M * 1000.0, 1, 0))
     poses, tcp = arm_poses(run.model, samples)
     return {
         "joints_deg": samples.round(2),
         "poses": poses,
+        "capsules": [{"radius": float(r), "height": float(h)} for r, h in zip(run.model.capsule_radius, run.model.capsule_height)],
         "link_state": link_state,
+        "summary": clearance_summary(run.model, distance, mesh, mesh_object, [o[0] for o in avoid]),
         "tcp_mm": tcp[:, :3].round(1),
         "owner": owner,
         "targets": [{"command": int(c), "kind": k, "blocked": b} for c, k, b in zip(run.command, run.kind, run.blocked)],
@@ -492,6 +562,7 @@ _ROUTES: dict[tuple[str, str], Callable[[EditorState, dict], dict]] = {
     ("GET", "/api/run"): run_status,
     ("GET", "/api/runs"): run_history,
     ("POST", "/api/runs/delete"): delete_run,
+    ("POST", "/api/runs/clean"): clean_history,
     ("GET", "/api/playback"): run_playback,
     ("POST", "/api/random"): random_content,
 }

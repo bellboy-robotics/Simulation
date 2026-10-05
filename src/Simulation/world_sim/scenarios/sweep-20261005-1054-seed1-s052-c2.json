@@ -1,0 +1,148 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path capsule",
+   "role": "avoid",
+   "type": "capsule",
+   "start_mm": [
+    485,
+    262,
+    -440
+   ],
+   "end_mm": [
+    485,
+    262,
+    504
+   ],
+   "radius_mm": 34
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    -140,
+    -385
+   ],
+   "top_height_mm": 532,
+   "size_mm": [
+    354,
+    405,
+    36
+   ],
+   "yaw_deg": 21,
+   "name": "random table 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    221,
+    -223
+   ],
+   "top_height_mm": 874,
+   "size_mm": [
+    324,
+    354,
+    29
+   ],
+   "yaw_deg": 78,
+   "name": "random table 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    -475,
+    -563,
+    643
+   ],
+   "end_mm": [
+    -255,
+    -807,
+    643
+   ],
+   "radius_mm": 32,
+   "name": "random capsule 2"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s052 cmd 2 pose: slow_single_move",
+ "start_joints_deg": [
+  24.643,
+  -28.674,
+  -11.281,
+  112.7,
+  -14.479,
+  86.38
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -533.3,
+    171.6,
+    798.5,
+    -1.0118,
+    -1.1198,
+    0.6982
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "slow_single_move"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 6.104555606842041,
+   "max_batch_s": null,
+   "before_motion_s": 5.984119653701782,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   -17.6,
+   -25.9,
+   -172.3,
+   0.2,
+   -66.0,
+   -114.6
+  ],
+  "pose_error_mm_deg": [
+   0.0484242661162722,
+   0.05386933467383197
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -197.728266433723,
+   -20.42808835460556,
+   -81.03227831295325,
+   4.530078143894529,
+   5.432512192227409,
+   62.57570015660977
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s052",
+   "command": 2
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

@@ -1,0 +1,129 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "name": "path sphere",
+   "role": "avoid",
+   "type": "sphere",
+   "center_mm": [
+    -506,
+    -274,
+    1048
+   ],
+   "radius_mm": 89
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "wall",
+   "start_xy_mm": [
+    411,
+    162
+   ],
+   "end_xy_mm": [
+    109,
+    754
+   ],
+   "height_mm": 1137,
+   "thickness_mm": 69,
+   "name": "random wall 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "sphere",
+   "center_mm": [
+    3,
+    375,
+    592
+   ],
+   "radius_mm": 95,
+   "name": "random sphere 2"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "table",
+   "center_xy_mm": [
+    78,
+    471
+   ],
+   "top_height_mm": 889,
+   "size_mm": [
+    516,
+    232,
+    33
+   ],
+   "yaw_deg": 132,
+   "name": "random table 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s005 cmd 3 replay_policy: replay_stall",
+ "start_joints_deg": [
+  1.1,
+  -100.2,
+  -106.3,
+  -170.5,
+  -9.9,
+  -119.3
+ ],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-unknown-20260412-183445-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "flag": {
+  "problems": [
+   "replay_stall"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 10.0495445728302,
+   "max_batch_s": 1.8824632167816162,
+   "before_motion_s": 0.7761571407318115,
+   "compile_s": 0.15577125600000002
+  },
+  "goal_joints_deg": [
+   -146.54,
+   4.36,
+   -88.78,
+   53.0,
+   83.31,
+   80.77
+  ],
+  "pose_error_mm_deg": null,
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -146.39378040557943,
+   4.495591238114665,
+   -89.01366171662579,
+   53.237499674314186,
+   83.60975947928428,
+   80.69310477914875
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s005",
+   "command": 3
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

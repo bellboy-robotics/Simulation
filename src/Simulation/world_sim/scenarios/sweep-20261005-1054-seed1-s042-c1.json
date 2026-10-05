@@ -1,0 +1,114 @@
+{
+ "billie": {
+  "pose": [
+   0,
+   0,
+   0
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "objects": [
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "wall",
+   "start_xy_mm": [
+    -392,
+    -438
+   ],
+   "end_xy_mm": [
+    -78,
+    -564
+   ],
+   "height_mm": 708,
+   "thickness_mm": 68,
+   "name": "random wall 1"
+  },
+  {
+   "role": "avoid",
+   "frame": "map",
+   "type": "capsule",
+   "start_mm": [
+    0,
+    420,
+    0
+   ],
+   "end_mm": [
+    0,
+    420,
+    766
+   ],
+   "radius_mm": 29,
+   "name": "random capsule 1"
+  }
+ ],
+ "name": "sweep-20261005-1054-seed1 s042 cmd 1 pose: ik_miss",
+ "start_joints_deg": [
+  147.3,
+  -44.12,
+  -57.783,
+  -111.366,
+  -65.167,
+  -141.785
+ ],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    287.8,
+    176.0,
+    545.8,
+    -0.5742,
+    1.0978,
+    -0.2112
+   ]
+  }
+ ],
+ "flag": {
+  "problems": [
+   "ik_miss"
+  ],
+  "error": null,
+  "timing": {
+   "planner_s": 0.09313750267028809,
+   "max_batch_s": null,
+   "before_motion_s": 0,
+   "compile_s": 0
+  },
+  "goal_joints_deg": [
+   27.7,
+   -85.0,
+   -18.2,
+   -132.4,
+   8.8,
+   -83.3
+  ],
+  "pose_error_mm_deg": [
+   8.986035950770123,
+   3.4916527683736787
+  ],
+  "oracle": null,
+  "goal_broken": [],
+  "end_broken": [],
+  "oracle_path_deg": null,
+  "end_joints_deg": [
+   -1.5371844453564985,
+   -85.35355458571273,
+   -5.967289964143197,
+   -55.396047772807904,
+   -28.83505060017785,
+   -155.9183425993788
+  ],
+  "source": {
+   "scenario": "sweep-20261005-1054-seed1 s042",
+   "command": 1
+  },
+  "reproduced": true,
+  "at_limits": []
+ }
+}

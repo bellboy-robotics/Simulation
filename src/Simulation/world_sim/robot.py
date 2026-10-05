@@ -131,9 +131,10 @@ def _sync_arm_urdf(host: str, say: Callable[[str], None] = print) -> None:
     urdf_dir = os.path.dirname(found[0])
     _sh(["ssh", host, "mkdir", "-p", f"{ROBOT_DIR}/env/urdf/meshes"])
     _sh(["rsync", "-a", found[0], f"{host}:{ROBOT_DIR}/env/urdf/"])
-    # Symlinks are copied as links: a gripper mesh linked into a missing base env stays missing, so the
-    # planner uses its gripper box, as the robots without that mesh do.
-    _sh([*_RSYNC, _dir_slash(os.path.join(urdf_dir, "meshes"), True), f"{host}:{ROBOT_DIR}/env/urdf/meshes/"])
+    # --copy-links: meshes linked into another env (ee-rome-v0-lod.stl -> ../../base/meshes/...) arrive as
+    # real files. Copied as links they dangle on the robot and the planner falls back to its gripper box.
+    _sh([*_RSYNC, "--copy-links", _dir_slash(os.path.join(urdf_dir, "meshes"), True),
+         f"{host}:{ROBOT_DIR}/env/urdf/meshes/"])  # fmt: skip
     say(f"Arm URDF {sn}: synced a fallback copy from {urdf_dir}")
 
 
