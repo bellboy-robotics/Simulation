@@ -17,12 +17,17 @@ import glob
 import json
 import os
 import subprocess
+from typing import Callable
 
 from Simulation.world_sim.recording import RECORDINGS_DIR, export_recording
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 # On the robot host; mounted at the same path in the billie container.
 ROBOT_DIR = "/home/bellboy/billie/world_sim"
+# The robot the timings are measured on (Jetson Orin GPU).
+DEFAULT_HOST = "bellboy@billie-29.bellboy"
+# billie-onboard checkout on the robot to take the planner code from ("" = the local billie-onboard).
+DEFAULT_ROBOT_CHECKOUT = "~/users/ronit/billie-onboard"
 # (path inside a billie-onboard checkout, path under ROBOT_DIR) of the planner code the plan step imports.
 _BILLIE_CODE = [
     ("billie/nodes/pyroki-planner/pyroki_planner", "billie/nodes/pyroki-planner/pyroki_planner"),
@@ -53,24 +58,36 @@ def _dir_slash(path: str, is_dir: bool) -> str:
     return path.rstrip("/") + ("/" if is_dir else "")
 
 
-def _sh(args: list[str], capture: bool = False) -> str:
+def _sh(args: list[str], capture: bool = False, log: Callable[[str], None] | None = None) -> str:
     """Runs a local command, failing loudly.
 
     args: Command and arguments. capture: Return its stdout instead of streaming it.
+    log: Receives each output line (stdout and stderr) when not capturing; None streams to this console.
     Returns: stdout when captured, else "".
     """
-    result = subprocess.run(args, check=True, text=True, capture_output=capture)
-    return result.stdout if capture else ""
+    if capture or log is None:
+        result = subprocess.run(args, check=True, text=True, capture_output=capture)
+        return result.stdout if capture else ""
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    tail = []  # the last lines, for the error message
+    for line in process.stdout:
+        log(line.rstrip())
+        tail = (tail + [line])[-20:]
+    if process.wait():
+        raise subprocess.CalledProcessError(process.returncode, args, "".join(tail))
+    return ""
 
 
-def sync(host: str, scenarios: list[str], robot_checkout: str) -> None:
+def sync(host: str, scenarios: list[str], robot_checkout: str, log: Callable[[str], None] | None = None) -> None:
     """Copies the planner code, world_sim, the scenarios and their recordings to ROBOT_DIR.
 
     host: ssh destination, e.g. bellboy@billie-29.bellboy.
     scenarios: Local scenario files.
     robot_checkout: billie-onboard checkout on the robot to take the planner code from, or "" for
         the local billie-onboard submodule.
+    log: Receives progress and command output lines; None prints them.
     """
+    say = log or print
     for path in scenarios:
         with open(path) as f:
             for command in json.load(f).get("commands", []):
@@ -85,31 +102,31 @@ def sync(host: str, scenarios: list[str], robot_checkout: str) -> None:
 
     if robot_checkout:
         commit = _sh(["ssh", host, f"git -C {robot_checkout} log -1 --format='%h %s'"], capture=True).strip()
-        print(f"Planner code: robot checkout {robot_checkout} at {commit} (local billie-onboard: {local_commit})")
+        say(f"Planner code: robot checkout {robot_checkout} at {commit} (local billie-onboard: {local_commit})")
         copies = [" ".join([*_RSYNC, _dir_slash(f"{robot_checkout}/{src}", "." not in os.path.basename(src)),
                             f"{ROBOT_DIR}/{dst}"]) for src, dst in _BILLIE_CODE]  # fmt: skip
-        _sh(["ssh", host, " && ".join(copies)])
+        _sh(["ssh", host, " && ".join(copies)], log=log)
     else:
-        print(f"Planner code: local billie-onboard at {local_commit}")
+        say(f"Planner code: local billie-onboard at {local_commit}")
         local_items = [(_local_billie_path(src), dst) for src, dst in _BILLIE_CODE] + local_items
     for local, remote in local_items:
-        _sh([*_RSYNC, _dir_slash(local, os.path.isdir(local)), f"{host}:{ROBOT_DIR}/{remote}"])
-    _sync_arm_urdf(host)
+        _sh([*_RSYNC, _dir_slash(local, os.path.isdir(local)), f"{host}:{ROBOT_DIR}/{remote}"], log=log)
+    _sync_arm_urdf(host, say)
 
 
-def _sync_arm_urdf(host: str) -> None:
+def _sync_arm_urdf(host: str, say: Callable[[str], None] = print) -> None:
     """Copies the robot arm's URDF (and meshes) from a local developer env, for robots with no physical arm (no URDF, e.g. billie-29).
 
     robot_run_plan.sh uses the copy only when the robot's own $BILLIE_ENVDIR/urdf has no URDF for its arm.
 
-    host: ssh destination.
+    host: ssh destination. say: Receives the progress messages.
     """
     environ = r"""docker exec billie sh -c 'tr "\0" "\n" < /proc/$(pgrep -f bin/pyroki-planner | head -1)/environ'"""
     env = dict(line.split("=", 1) for line in _sh(["ssh", host, environ], capture=True).splitlines() if "=" in line)
     sn = env.get("XARM_SN", "")
     found = sorted(glob.glob(os.path.expanduser(f"~/releases/env/*/urdf/{sn}.urdf"))) if sn else []
     if not found:
-        print(f"No local URDF for arm {sn or '?'}; the robot's own one must exist")
+        say(f"No local URDF for arm {sn or '?'}; the robot's own one must exist")
         return
     urdf_dir = os.path.dirname(found[0])
     _sh(["ssh", host, "mkdir", "-p", f"{ROBOT_DIR}/env/urdf/meshes"])
@@ -117,27 +134,37 @@ def _sync_arm_urdf(host: str) -> None:
     # Symlinks are copied as links: a gripper mesh linked into a missing base env stays missing, so the
     # planner uses its gripper box, as the robots without that mesh do.
     _sh([*_RSYNC, _dir_slash(os.path.join(urdf_dir, "meshes"), True), f"{host}:{ROBOT_DIR}/env/urdf/meshes/"])
-    print(f"Arm URDF {sn}: synced a fallback copy from {urdf_dir}")
+    say(f"Arm URDF {sn}: synced a fallback copy from {urdf_dir}")
 
 
-def run(host: str, scenarios: list[str], plan_args: list[str]) -> None:
+def run(host: str, scenarios: list[str], plan_args: list[str], log: Callable[[str], None] | None = None) -> None:
     """Runs the plan step in the robot's billie container; its output streams here.
 
     host: ssh destination. scenarios: Local scenario files (already synced).
     plan_args: Extra plan.py flags, e.g. ["--keep-going"].
+    log: Receives the plan step's output lines; None streams them to this console.
     """
     remote = [f"scenarios/{os.path.basename(p)}" for p in scenarios]
     _sh(["ssh", host, "docker", "exec", "billie", "bash", f"{ROBOT_DIR}/src/Simulation/world_sim/robot_run_plan.sh",
-         ROBOT_DIR, *remote, "--out", f"{ROBOT_DIR}/results", *plan_args])  # fmt: skip
+         ROBOT_DIR, *remote, "--out", f"{ROBOT_DIR}/results", *plan_args], log=log)  # fmt: skip
 
 
-def fetch(host: str, scenarios: list[str]) -> list[str]:
+def robot_name(host: str) -> str:
+    """Short robot name of an ssh destination.
+
+    host: e.g. bellboy@billie-29.bellboy. Returns: e.g. billie-29.
+    """
+    return host.split("@")[-1].split(".")[0]
+
+
+def fetch(host: str, scenarios: list[str], folder: str | None = None) -> list[str]:
     """Copies the scenarios' results back.
 
     host: ssh destination. scenarios: Local scenario files.
-    Returns: Local results files, in output/world_sim/<robot name>/.
+    folder: Local folder for the results; default output/world_sim/<robot name>/.
+    Returns: Local results files, named like the scenarios.
     """
-    folder = os.path.join(_REPO, "output", "world_sim", host.split("@")[-1].split(".")[0])
+    folder = folder or os.path.join(_REPO, "output", "world_sim", robot_name(host))
     os.makedirs(folder, exist_ok=True)
     out = []
     for path in scenarios:
@@ -151,8 +178,8 @@ def main() -> None:
     """Command line: sync, run and fetch, then write a report per scenario."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("scenarios", nargs="+", help="scenario JSON files")
-    parser.add_argument("--host", default="bellboy@billie-29.bellboy", help="robot ssh destination")
-    parser.add_argument("--robot-checkout", default="~/users/ronit/billie-onboard",
+    parser.add_argument("--host", default=DEFAULT_HOST, help="robot ssh destination")
+    parser.add_argument("--robot-checkout", default=DEFAULT_ROBOT_CHECKOUT,
                         help='billie-onboard checkout on the robot to take the planner code from ("" = local code)')
     parser.add_argument("--keep-going", action="store_true", help="run the remaining commands after a failure")
     parser.add_argument("--continue-on-block", action="store_true", help="play moves the guard refuses, flagged")

@@ -103,6 +103,8 @@ def object_capsules(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarra
           size_mm [length, width, thickness], yaw_deg (direction of the length, from +X).
         - "wall": an upright board standing on the floor. start_xy_mm, end_xy_mm, height_mm
           (above the floor), thickness_mm.
+          Tables and walls may set spacing_mm: the distance between neighbouring capsule centers
+          (radius = thickness / 2). Without it the robot's builders choose it.
         - "capsule": start_mm [x, y, z], end_mm [x, y, z], radius_mm.
         - "sphere": center_mm [x, y, z], radius_mm.
     floor_z_m: Arm-frame z of the floor, meters.
@@ -113,7 +115,22 @@ def object_capsules(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarra
         length, width, thickness = spec["size_mm"]
         center_z_mm = floor_z_m * 1000.0 + spec["top_height_mm"] - thickness / 2.0
         center_mm = (*spec["center_xy_mm"], center_z_mm)
-        return tabletop_capsules(center_mm, (length, width, thickness), spec.get("yaw_deg", 0.0))
+        if spec.get("spacing_mm") is None:
+            return tabletop_capsules(center_mm, (length, width, thickness), spec.get("yaw_deg", 0.0))
+        # Capsules along the length, side by side across the width, the outer ones inside the edges.
+        yaw, radius = np.deg2rad(spec.get("yaw_deg", 0.0)), thickness / 2.0
+        length_axis, width_axis = np.array([np.cos(yaw), np.sin(yaw), 0.0]), np.array([-np.sin(yaw), np.cos(yaw), 0.0])
+        across = max(width / 2.0 - radius, 0.0) * width_axis
+        half = max(length / 2.0 - radius, 0.0) * length_axis
+        return capsule_row(np.asarray(center_mm) - across, np.asarray(center_mm) + across, half, radius, spec["spacing_mm"])
+    if kind == "wall" and spec.get("spacing_mm") is not None:
+        # Upright capsules along the base line, the domes ending at the floor and the wall's top.
+        radius, height = spec["thickness_mm"] / 2.0, spec["height_mm"]
+        floor_mm = floor_z_m * 1000.0
+        half_mm = max(height - radius, 0.0) / 2.0  # the bottom dome may go below the floor, like wall_capsules
+        middle = floor_mm + half_mm
+        first, last = (np.array([*spec[k], middle]) for k in ("start_xy_mm", "end_xy_mm"))
+        return capsule_row(first, last, np.array([0.0, 0.0, half_mm]), radius, spec["spacing_mm"])
     if kind == "wall":
         return wall_capsules(
             np.asarray(spec["start_xy_mm"]) / 1000.0,
@@ -129,6 +146,24 @@ def object_capsules(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarra
         center = np.asarray(spec["center_mm"]) / 1000.0
         return center[None], center[None], np.array([spec["radius_mm"] / 1000.0])
     raise ValueError(f"Unknown object type {kind!r}; use table, wall, capsule or sphere")
+
+
+def capsule_row(
+    first_mm: np.ndarray, last_mm: np.ndarray, half_axis_mm: np.ndarray, radius_mm: float, spacing_mm: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A row of equal, parallel capsules whose centers are evenly spread from one point to another.
+
+    first_mm, last_mm: (3,) centers of the first and last capsule, mm.
+    half_axis_mm: (3,) from a capsule's center to one end of its segment, mm.
+    radius_mm: Capsule radius, mm.
+    spacing_mm: Largest distance between neighbouring centers, mm; the row uses the fewest capsules that keep it.
+    Returns: (starts_m (M, 3), ends_m (M, 3), radii_m (M,)).
+    """
+    if spacing_mm <= 0:
+        raise ValueError(f"spacing_mm must be positive, got {spacing_mm}")
+    n = int(np.ceil(np.linalg.norm(last_mm - first_mm) / spacing_mm)) + 1
+    centers = first_mm[None] + np.linspace(0.0, 1.0, n)[:, None] * (last_mm - first_mm)[None]
+    return (centers - half_axis_mm) / 1000.0, (centers + half_axis_mm) / 1000.0, np.full(n, radius_mm / 1000.0)
 
 
 def object_in_arm_frame(spec: dict, billie: dict | None, arm_base_height_m: float) -> dict:

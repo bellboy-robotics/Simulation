@@ -19,7 +19,7 @@ python -m Simulation.world_sim.view output/world_sim/post_across_path.json
 ## Editor
 
 ```bash
-python -m Simulation.world_sim.editor [post_across_path.json]   # opens http://127.0.0.1:8765
+python -m Simulation.world_sim.editor [post_across_path.json] [--robot bellboy@billie-29.bellboy ...]
 ```
 
 A browser page to build scenarios and run them:
@@ -27,16 +27,31 @@ A browser page to build scenarios and run them:
   and drag it in the view.
 - **Objects**: add a table, wall, post or ball in front of the arm, then drag it (W = move,
   E = rotate) or type its fields. The view draws the capsules the planner gets. The header shows the
-  count against the 32 slots.
+  count against the 32 slots. For a table or wall, "spacing" sets the distance between neighbouring
+  capsules (empty = the robot's default). Fewer capsules save slots; the form shows the holes that
+  leaves. "🎲 Random object" adds a table, wall, post or ball within the arm's reach, never touching
+  Billie at the start joints.
 - **Arm**: Billie is drawn from the planner's merged URDF (`/tmp/urdf/<XARM_SN>-with-tcp.urdf`: base,
   xArm, gripper and TCP) with its meshes, and its joints are set by the URDF itself. A link turns
   orange within the planner's 2cm margin of an avoid object and magenta inside one. "Planner
   capsules" (C) overlays the link capsules the planner checks. The sliders edit whatever is
   selected: the start joints, a `joints` command, or a free preview.
 - **Commands**: add `joints` (the slider joints), `pose` (the current TCP; drag its target in the
-  view) or `replay_policy`. "Solve IK" shows the planner's solution for a pose.
-- **Run** plans the scenario like `plan`. It writes `output/world_sim/<file>.json` and its report,
-  then plays the path with link colors, the TCP path and the operator messages.
+  view) or `replay_policy`. "Solve IK" shows the planner's solution for a pose. "🎲 Random" adds N
+  `joints` or `pose` commands to valid configurations: inside the joint limits, clear of the avoid
+  objects, the floor and Billie's own body. A pose is the TCP of such a configuration, so it is reachable.
+  The toast shows the seed; type it in the seed field to draw the same again.
+- **Run on**: tick this Mac and/or robots. Robots come from `--robot` (default billie-29) or the
+  "add a robot" field. All ticked machines plan the same scenario at once. A robot runs
+  `robot.py`'s sync → plan in its `billie` container → fetch, with the planner code from "robot code"
+  (a checkout on the robot; empty = this Mac's billie-onboard). Each machine shows its stage and log
+  line live. When they finish you get ▶ play, its report and a per-command table: planner seconds /
+  robot time estimate, plus the planner build.
+- **History**: every Run is kept in `output/world_sim/runs/<time>_<file>/` with the scenario as it
+  ran, then per machine its results (`local.json`, `billie-29.json`, ...) and report. A run also keeps
+  the note typed before Run. Click a run to see its machines and timing, play one (this loads that
+  run's scenario), reopen its scenario or delete it. `runs/index.html` ("all runs") lists every
+  run and opens straight from disk too.
 - **Save** writes the scenario to `scenarios/`, ready for `plan` and `robot.py`.
 
 The planner builds in the background. Editing works before it is ready, using the arm model cached in
@@ -74,6 +89,10 @@ The planner builds in the background. Editing works before it is ready, using th
   floor is 440.5mm below the arm base.
 - `avoid` objects go to the planner, the arm-move guard, detours and reroutes. Together they must
   fit in the planner's 32 capsule slots. A table uses about `width / thickness` capsules.
+- A table or wall may set `"spacing_mm"`: the distance between neighbouring capsule centers (radius =
+  thickness / 2). Without it the robot's builders choose: a wall every 1.2 radii (overlapping), a
+  table every 2 radii (touching). A larger spacing uses fewer capsules but leaves holes of
+  `spacing - thickness`.
 - `eef_touch` objects are only drawn (green) and measured: EEF vs rest-of-arm distance in the
   report. The planner does not know them yet; see WORLD_COLLISION_DISCUSSION.md §3.
 

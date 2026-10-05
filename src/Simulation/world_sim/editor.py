@@ -1,14 +1,15 @@
 """World editor: a browser page to place Billie on the map, put objects around it, pick the joints and
 poses to test, and run them through the planner.
 
-    python -m Simulation.world_sim.editor [post_across_path.json] [--port 8765] [--no-planner]
+    python -m Simulation.world_sim.editor [post_across_path.json] [--robot bellboy@billie-29.bellboy ...]
 
 The page (editor.html) is served by this process, which reuses the plan and view steps:
-- the arm is drawn from the planner's collision model (cached in output/world_sim/arm_model.json
-  after the first planner build, so editing works while the planner compiles);
+- Billie is drawn from the planner's merged URDF; clearance comes from the planner's collision model
+  (cached in output/world_sim/arm_model.json after the first build, so editing works while it compiles);
 - objects are drawn from world.object_capsules, so the page shows the capsules the planner gets;
-- Run plans the edited scenario in-process (plan.run_scenario), writes the results and the HTML
-  report next to the plan step's (output/world_sim/<file>.json/.html) and plays the path on the page.
+- Run plans the edited scenario on this machine and/or robots over ssh (runs.py), archives each
+  run's results and reports in output/world_sim/runs/ and plays the path on the page;
+- random objects and motions come from randomize.py.
 Scenarios are saved to src/Simulation/world_sim/scenarios/, ready for plan.py and robot.py.
 """
 
@@ -32,7 +33,9 @@ from billie_utils.messages.pyroki_world_poc import DEFAULT_ARM_BASE_HEIGHT_M, MA
 from billie_utils.world_collision_check_poc import CollisionModel, link_obstacle_distances, link_transforms
 from scipy.spatial.transform import Rotation
 
+from Simulation.world_sim import robot, runs
 from Simulation.world_sim.analysis import Run, dense_path, link_distances, load_run
+from Simulation.world_sim.randomize import random_motions, random_objects
 from Simulation.world_sim.world import object_capsules, scenario_from_data
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,11 +54,13 @@ _FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
 class EditorState:
     """What the request handlers share: the arm model and the planner, built in the background."""
 
-    def __init__(self, use_planner: bool):
+    def __init__(self, use_planner: bool, robots: list[str]):
         """Loads the cached arm model and starts the planner build.
 
         use_planner: Build the planner (JAX) for Run and Solve IK; without it the page edits and previews only.
+        robots: ssh destinations of the robots offered as run targets.
         """
+        self.robots = robots
         self.model: CollisionModel | None = _cached_model()
         self.planner = None  # SimPlanner once built
         self.status = "building" if use_planner else "off"  # planner state shown on the page
@@ -183,7 +188,8 @@ def model_info(state: EditorState, _query: dict) -> dict:
 
     state: The editor state. _query: Unused.
     Returns: {"links": [{"name", "radius", "height", "movable"}], "joint_limits_deg": 6 [lo, hi],
-        "arm_to_base": default [x_mm, y_mm, yaw_deg], "floor_z_mm", "max_capsules", "margin_mm", "planner"}.
+        "arm_to_base": default [x_mm, y_mm, yaw_deg], "floor_z_mm", "max_capsules", "margin_mm", "planner",
+        "robots": robot ssh destinations, "robot_checkout": default planner code checkout on the robots}.
     """
     model = state.require_model()
     # The arm base in the robot frame, read from the URDF's mobile base link under the arm. The
@@ -205,6 +211,8 @@ def model_info(state: EditorState, _query: dict) -> dict:
         "max_capsules": MAX_WORLD_CAPSULES,
         "margin_mm": WORLD_COL_MARGIN_M * 1000.0,
         "planner": state.status,
+        "robots": state.robots,
+        "robot_checkout": robot.DEFAULT_ROBOT_CHECKOUT,
     }
 
 
@@ -230,7 +238,8 @@ def world_view(state: EditorState, data: dict) -> dict:
     """Every object's capsules in its own frame, for drawing, and the planner's capsule budget.
 
     state: The editor state. data: The scenario as edited on the page.
-    Returns: {"objects": per object {"capsules": [[sx, sy, sz, ex, ey, ez, r] meters], "error": str or None},
+    Returns: {"objects": per object {"capsules": [[sx, sy, sz, ex, ey, ez, r] meters], "error": str or None,
+        "spacing_mm": distance between neighbouring capsule centers (null for one capsule)},
         "avoid_capsules": capsules the avoid objects need, "max_capsules": planner slots}.
     """
     floor_z_m = data.get("floor_z_mm", -DEFAULT_ARM_BASE_HEIGHT_M * 1000.0) / 1000.0
@@ -241,11 +250,13 @@ def world_view(state: EditorState, data: dict) -> dict:
             floor = 0.0 if spec.get("frame") == "map" else floor_z_m
             starts, ends, radii = object_capsules(spec, floor)
             rows, error = np.column_stack([starts, ends, radii]).round(_DECIMALS).tolist(), None
+            centers = (starts + ends) / 2.0
+            spacing = round(float(np.linalg.norm(centers[1] - centers[0])) * 1000.0, 1) if len(radii) > 1 else None
         except (KeyError, ValueError, TypeError, AssertionError) as e:
-            rows, error = [], f"{type(e).__name__}: {e}"
+            rows, error, spacing = [], f"{type(e).__name__}: {e}", None
         if spec.get("role", "avoid") == "avoid":
             n_avoid += len(rows)
-        objects.append({"capsules": rows, "error": error})
+        objects.append({"capsules": rows, "error": error, "spacing_mm": spacing})
     return {"objects": objects, "avoid_capsules": n_avoid, "max_capsules": MAX_WORLD_CAPSULES}
 
 
@@ -292,36 +303,94 @@ def solve_ik(state: EditorState, body: dict) -> dict:
     return {"joints": solution.round(2), "error_mm": round(error_mm, 1), "base_collision": base_collision}
 
 
-def run_scenario_on_page(state: EditorState, body: dict) -> dict:
-    """Plans the edited scenario like plan.py, saves its results and report, and returns the path to play.
+def plan_locally(state: EditorState, scenario_data: dict, flags: dict) -> dict:
+    """Plans a scenario with this machine's planner, like plan.py.
 
     state: The editor state.
-    body: {"scenario": the edited scenario, "file": its file name (names the results), "keep_going",
-        "continue_on_block": the plan.py flags}.
-    Returns: playback(run), plus "report" (URL of the HTML report) and "results" (results file path).
+    scenario_data: The scenario JSON. flags: {"keep_going", "continue_on_block"}, the plan.py flags.
+    Returns: The plan results (plan.run_scenario's dict plus "name").
+    Raises: RuntimeError while the planner is not ready.
     """
     planner = state.require_planner()
-    from Simulation.world_sim.plan import run_scenario, save_results  # noqa: PLC0415 (imports JAX)
-    from Simulation.world_sim.report import write_report  # noqa: PLC0415 (imports plotly)
+    from Simulation.world_sim.plan import run_scenario  # noqa: PLC0415 (imports JAX)
 
-    scenario = scenario_from_data(body["scenario"], "editor")
+    scenario = scenario_from_data(scenario_data, "editor")
     with state.lock:
         results = run_scenario(
             planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"],
-            continue_on_block=bool(body.get("continue_on_block")), stop_on_error=not body.get("keep_going"),
+            continue_on_block=bool(flags.get("continue_on_block")), stop_on_error=not flags.get("keep_going"),
         )  # fmt: skip
     results["name"] = scenario["name"]
-    stem = os.path.splitext(os.path.basename(body.get("file") or "editor.json"))[0]
-    path = os.path.join(OUTPUT_DIR, f"{stem}.json")
-    save_results(results, path)
-    run = load_run(path)
-    report = f"/output/{stem}.html"
-    try:
-        write_report(run, os.path.join(OUTPUT_DIR, f"{stem}.html"), open_browser=False)
-    except Exception:  # the playback is still worth showing without the report
-        logging.exception("Writing the report failed")
-        report = None
-    return {**playback(run), "report": report, "results": path}
+    return results
+
+
+def start_run(state: EditorState, body: dict) -> dict:
+    """Starts a run of the edited scenario on the chosen machines (see runs.py).
+
+    state: The editor state.
+    body: {"scenario", "file", "note", "keep_going", "continue_on_block", "targets": "local" and/or ssh
+        destinations, "robot_checkout": billie-onboard checkout on the robots ("" = local code)}.
+    Returns: The run's meta; poll it with GET /api/run?id=.
+    """
+    if not body.get("targets"):
+        raise ValueError("Choose at least one machine to run on")
+    flags = {k: bool(body.get(k)) for k in ("keep_going", "continue_on_block")}
+    return runs.start_run(body["scenario"], body.get("file", ""), body.get("note", ""), flags, body["targets"],
+                          body.get("robot_checkout", robot.DEFAULT_ROBOT_CHECKOUT),
+                          lambda data, f: plan_locally(state, data, f))  # fmt: skip
+
+
+def run_status(state: EditorState, query: dict) -> dict:
+    """One run's meta with its machines' progress.
+
+    state: Unused. query: {"id": run id}. Returns: The meta (see runs.py).
+    """
+    return runs.get_run(query["id"])
+
+
+def run_history(state: EditorState, _query: dict) -> dict:
+    """Every archived run, newest first, without the machines' logs.
+
+    state, _query: Unused. Returns: {"runs": metas}.
+    """
+    metas = runs.list_runs()
+    return {"runs": [{**m, "targets": {n: {k: v for k, v in t.items() if k != "log"} for n, t in m["targets"].items()}}
+                     for m in metas]}  # fmt: skip
+
+
+def delete_run(state: EditorState, body: dict) -> dict:
+    """Deletes an archived run.
+
+    state: Unused. body: {"id": run id}. Returns: {"deleted": the id}.
+    """
+    runs.delete_run(body["id"])
+    return {"deleted": body["id"]}
+
+
+def run_playback(state: EditorState, query: dict) -> dict:
+    """The arm path of one machine of a run, for the page's player.
+
+    state: Unused. query: {"run": run id, "target": machine name}.
+    Returns: playback(run) of that machine's results.
+    """
+    return playback(load_run(runs.results_path(query["run"], query["target"])))
+
+
+def random_content(state: EditorState, body: dict) -> dict:
+    """Random objects or motions for the edited scenario (see randomize.py).
+
+    state: The editor state.
+    body: {"scenario", "what": "object" | "joints" | "pose", "count", "type": object type or null,
+        "seed": int or null for a new one}.
+    Returns: {"objects": [...]} or {"commands": [...]}, and "seed" (draws the same again).
+    """
+    seed = body.get("seed")
+    seed = int(seed) if seed not in (None, "") else int(np.random.default_rng().integers(1_000_000))
+    rng, count, model = np.random.default_rng(seed), int(body.get("count", 1)), state.require_model()
+    if body["what"] == "object":
+        return {"objects": random_objects(body["scenario"], model, rng, count, body.get("type")), "seed": seed}
+    commands = random_motions(body["scenario"], model, joint_limits_deg(), rng, count, body["what"])
+    return {"commands": commands, "seed": seed}
 
 
 def playback(run: Run) -> dict:
@@ -419,7 +488,12 @@ _ROUTES: dict[tuple[str, str], Callable[[EditorState, dict], dict]] = {
     ("POST", "/api/world"): world_view,
     ("POST", "/api/fk"): forward_kinematics,
     ("POST", "/api/ik"): solve_ik,
-    ("POST", "/api/run"): run_scenario_on_page,
+    ("POST", "/api/run"): start_run,
+    ("GET", "/api/run"): run_status,
+    ("GET", "/api/runs"): run_history,
+    ("POST", "/api/runs/delete"): delete_run,
+    ("GET", "/api/playback"): run_playback,
+    ("POST", "/api/random"): random_content,
 }
 
 
@@ -461,11 +535,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(HTTPStatus.OK, "application/octet-stream", mesh_file(self.state, url.path))
             if method == "GET" and url.path == "/":
                 return self._send(HTTPStatus.OK, "text/html; charset=utf-8", open(EDITOR_HTML, "rb").read())
-            if method == "GET" and url.path.startswith("/output/"):
-                name = os.path.basename(url.path)
-                if not name.endswith(".html") or not os.path.exists(os.path.join(OUTPUT_DIR, name)):
-                    return self._send_json({"error": "no such report"}, HTTPStatus.NOT_FOUND)
-                return self._send(HTTPStatus.OK, "text/html; charset=utf-8", open(os.path.join(OUTPUT_DIR, name), "rb").read())
+            if method == "GET" and url.path.startswith("/runs/"):
+                return self._send_run_file(url.path)
             route = _ROUTES.get((method, url.path))
             if route is None:
                 return self._send_json({"error": f"no route {method} {url.path}"}, HTTPStatus.NOT_FOUND)
@@ -478,6 +549,20 @@ class _Handler(BaseHTTPRequestHandler):
             expected = isinstance(e, (RuntimeError, ValueError, KeyError, FileNotFoundError))
             logging.warning(f"{method} {url.path} failed: {e}" if expected else traceback.format_exc())
             self._send_json({"error": f"{type(e).__name__}: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _send_run_file(self, url_path: str) -> None:
+        """Sends an archived run file: /runs/index.html or /runs/<run id>/<file>.html|.json.
+
+        url_path: The request path.
+        """
+        parts = url_path.strip("/").split("/")[1:]
+        safe = len(parts) in (1, 2) and all(re.fullmatch(r"[A-Za-z0-9_.+-]+", p) and p not in (".", "..") for p in parts)
+        path = os.path.join(runs.RUNS_DIR, *parts) if safe else ""
+        if not path.endswith((".html", ".json")) or not os.path.isfile(path):
+            return self._send_json({"error": "no such file"}, HTTPStatus.NOT_FOUND)
+        kind = "text/html; charset=utf-8" if path.endswith(".html") else "application/json"
+        with open(path, "rb") as f:
+            self._send(HTTPStatus.OK, kind, f.read())
 
     def _send_json(self, data: dict, status: HTTPStatus = HTTPStatus.OK) -> None:
         """Sends a JSON reply.
@@ -513,10 +598,12 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="local port of the page")
     parser.add_argument("--no-planner", action="store_true", help="edit and preview only (no JAX; needs a cached arm model)")
     parser.add_argument("--no-browser", action="store_true", help="do not open the page")
+    parser.add_argument("--robot", action="append", help=f"robot ssh destination offered as a run target "
+                        f"(repeat for several; default {robot.DEFAULT_HOST}); more can be added on the page")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    _Handler.state = EditorState(use_planner=not args.no_planner)
+    _Handler.state = EditorState(use_planner=not args.no_planner, robots=args.robot or [robot.DEFAULT_HOST])
     server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)
     url = f"http://127.0.0.1:{args.port}/" + (f"?file={args.scenario}" if args.scenario else "")
     print(f"World editor: {url}  (Ctrl+C to stop)")

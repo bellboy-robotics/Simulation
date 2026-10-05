@@ -64,6 +64,11 @@
   #legend div { display: flex; gap: 6px; align-items: center; }
   #toast { position: absolute; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line);
            border-radius: 8px; padding: 6px 12px; display: none; max-width: 70%; }
+  .target { margin: 5px 0; }
+  .mono { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  pre { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: 11px; }
+  table.timing { border-collapse: collapse; margin: 6px 0; font-size: 11px; width: 100%; }
+  table.timing td, table.timing th { border: 1px solid var(--line); padding: 2px 5px; text-align: left; }
   #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 </style>
 </head>
@@ -93,6 +98,8 @@
         <button data-add="table">+ Table</button><button data-add="wall">+ Wall</button>
         <button data-add="capsule">+ Post</button><button data-add="sphere">+ Ball</button>
       </div>
+      <div class="row"><button id="randObject" title="A random object within the arm's reach, clear of Billie at the start joints">🎲 Random object</button>
+        <input id="objSeed" type="number" placeholder="seed" title="Empty draws a new one; the toast shows the seed used" style="width:90px"></div>
       <div id="objects" class="list"></div>
       <div id="objectForm"></div>
     </section>
@@ -112,18 +119,32 @@
     <section>
       <h2>Commands</h2>
       <div class="row"><button id="addReplay">+ replay_policy</button></div>
+      <div class="row"><button id="randMotion" title="Valid configurations only: joint limits, clear of objects, floor and Billie's body">🎲 Random</button>
+        <input id="randCount" type="number" value="3" min="1" max="50" style="width:50px">
+        <select id="randKind"><option value="joints">joints cmds</option><option value="pose">pose cmds</option></select>
+        <input id="motionSeed" type="number" placeholder="seed" style="width:80px"></div>
       <div id="commands" class="list"></div>
       <div id="commandForm"></div>
     </section>
 
     <section>
-      <h2>Run</h2>
-      <div class="row"><label><input id="keepGoing" type="checkbox"> keep going</label>
-        <label><input id="continueOnBlock" type="checkbox"> continue on block</label></div>
-      <div class="row"><button id="run" class="primary">Run through planner</button><a id="report" target="_blank" style="display:none">report ↗</a></div>
-      <div id="runStatus" class="small muted"></div>
+      <h2>Run on</h2>
+      <div id="targets"></div>
+      <div class="row"><input id="newRobot" type="text" class="wide" placeholder="add a robot: bellboy@billie-30.bellboy"><button id="addRobot">Add</button></div>
+      <div class="row" title="billie-onboard checkout on the robots to take the planner code from; empty = this Mac's billie-onboard">
+        <label>robot code</label><input id="checkout" type="text" class="wide"></div>
+      <div class="row"><label>note</label><input id="note" type="text" class="wide" placeholder="what this run tests"></div>
+      <div class="row"><label style="width:auto"><input id="keepGoing" type="checkbox"> keep going</label>
+        <label style="width:auto"><input id="continueOnBlock" type="checkbox"> continue on block</label></div>
+      <div class="row"><button id="run" class="primary">Run</button></div>
+      <div id="runView"></div>
       <div id="outcomes"></div>
       <div id="events"></div>
+    </section>
+
+    <section>
+      <h2>History <a href="/runs/index.html" target="_blank" class="small">all runs ↗</a></h2>
+      <div id="history" class="list"></div>
     </section>
   </div>
 
@@ -176,6 +197,11 @@ const CAPSULE_COLOR = 0x6b9cff;
 const NEW_START_JOINTS = [0, -30, -60, 0, 90, 0];
 // [samples/s] Playback rate at speed 1: one path sample per 20ms brain tick, like the PyBullet viewer.
 const SAMPLES_PER_S = 50;
+// History rows shown on the page (runs/index.html lists them all).
+const HISTORY_ROWS = 30;
+// [ms] How often a running run's progress is fetched.
+const RUN_POLL_MS = 1500;
+const LOCAL = 'local';  // run target name of this machine
 // [mm] How far ahead of the arm base a new object is placed.
 const NEW_OBJECT_AHEAD_MM = 550;
 
@@ -186,7 +212,8 @@ let fileName = '';           // its file name in scenarios/
 let sel = { kind: null, index: -1 };  // selection: billie | object | start | command
 let previewJoints = NEW_START_JOINTS.slice();
 let lastTcp = null;          // TCP pose [mm, rad] of the previewed joints
-let play = null;             // /api/run reply while the playback is shown
+let play = null;             // /api/playback reply while the playback is shown
+let dirty = false;           // the scenario has changes that are not saved
 
 // ----- API --------------------------------------------------------------------------------------
 /** Calls the editor server. path: API path; body: JSON body for a POST (GET when undefined). Returns: the reply. */
@@ -406,6 +433,7 @@ function refreshWorld() {
       worldReply = reply;
       drawObjects();
       renderObjectList();
+      updateSpacingInfo();
       refreshArm();
     } catch (e) { toast(e.message, true); }
   }, 60);
@@ -491,6 +519,7 @@ function renderObjectForm() {
     const values = n === 1 ? [o[key] ?? 0] : o[key];
     form.append(numberRow(label, values, (v) => { o[key] = n === 1 ? v[0] : v; edited(); attachGizmo(); }, key === 'yaw_deg' ? 5 : 10));
   }
+  if (o.type === 'table' || o.type === 'wall') form.append(spacingRow(o));
   const actions = document.createElement('div'); actions.className = 'row';
   actions.innerHTML = '<button data-act="dup">Duplicate</button><button data-act="del">Delete</button>';
   actions.querySelector('[data-act=dup]').onclick = () => {
@@ -501,6 +530,32 @@ function renderObjectForm() {
   actions.querySelector('[data-act=del]').onclick = () => { scn.objects.splice(sel.index, 1); select(null); edited(); };
   form.append(actions);
   box.append(form);
+  updateSpacingInfo();
+}
+
+/** The spacing field of a table or wall; empty = the robot's builder decides. o: the object. Returns: the row. */
+function spacingRow(o) {
+  const row = document.createElement('div'); row.className = 'row';
+  row.innerHTML = `<label title="Distance between neighbouring capsule centers; empty = the robot's default">spacing</label>
+    <input type="number" step="5" min="1" placeholder="auto"><span class="small" data-spacing></span>`;
+  const input = row.querySelector('input');
+  input.value = o.spacing_mm ?? '';
+  input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    if (input.value === '') delete o.spacing_mm; else if (v > 0) o.spacing_mm = v; else return;
+    edited();
+  });
+  return row;
+}
+
+/** The selected table's or wall's capsule count, radius, spacing and the holes between capsules. */
+function updateSpacingInfo() {
+  const el = document.querySelector('#objectForm [data-spacing]');
+  const shape = sel.kind === 'object' ? worldReply?.objects[sel.index] : null;
+  if (!el || !shape?.capsules.length) return;
+  const r = shape.capsules[0][6] * 1000, gap = (shape.spacing_mm ?? 0) - 2 * r;
+  el.innerHTML = `${shape.capsules.length} caps · r ${r.toFixed(0)} · every ${shape.spacing_mm?.toFixed(0) ?? '—'} mm · `
+    + (gap > 0.5 ? `<span class="warn">${gap.toFixed(0)} mm holes</span>` : 'no holes');
 }
 
 /** A new object in front of the arm, in the map frame. type: table | wall | capsule | sphere. */
@@ -787,6 +842,7 @@ function normalize(data) {
 /** Shows a scenario. data: parsed scenario; file: its file name ('' for a new one). */
 function loadScenario(data, file) {
   exitPlayback();
+  dirty = false;
   scn = normalize(data); fileName = file;
   $('file').value = file; $('name').value = scn.name || '';
   $('files').value = file;
@@ -798,8 +854,12 @@ function loadScenario(data, file) {
   focusBillie();
 }
 
+/** Asks before unsaved changes are replaced. Returns: true if it is fine to replace the scenario. */
+function mayDiscard() { return !dirty || confirm('Replace the scenario you are editing? Its unsaved changes are lost.'); }
+
 /** Opens a scenario file from the server. file: its name in scenarios/. */
 async function openFile(file) {
+  if (!mayDiscard()) return;
   try { const reply = await api(`/api/scenario?file=${encodeURIComponent(file)}`); loadScenario(reply.scenario, reply.file); }
   catch (e) { toast(e.message, true); }
 }
@@ -817,7 +877,7 @@ async function save() {
   if (!file) { toast('Give the scenario a file name first', true); return; }
   try {
     const reply = await api('/api/scenario', { file, scenario: scn });
-    fileName = reply.file; $('file').value = reply.file;
+    fileName = reply.file; $('file').value = reply.file; dirty = false;
     await listFiles();
     toast(`Saved ${reply.path}`);
   } catch (e) { toast(e.message, true); }
@@ -828,38 +888,158 @@ async function save() {
  * objects: the objects changed too, so their capsules are recomputed.
  */
 function edited(objects = true) {
+  dirty = true;
   exitPlayback();
   placeBillie();
   if (objects) refreshWorld();
 }
 
-// ----- run & playback ---------------------------------------------------------------------------
-/** Plans the scenario on the server and starts the playback. */
-async function runPlanner() {
-  $('run').disabled = true; $('runStatus').textContent = 'Planning… (the first run of a session compiles)';
-  $('outcomes').innerHTML = ''; $('events').innerHTML = ''; $('report').style.display = 'none';
-  const t0 = performance.now();
+// ----- random content ---------------------------------------------------------------------------
+/**
+ * Adds random objects or commands drawn by the server. what: 'object' | 'joints' | 'pose';
+ * count: how many; seedInput: its seed field (empty = a new seed).
+ */
+async function addRandom(what, count, seedInput) {
   try {
-    const reply = await api('/api/run', { scenario: scn, file: fileName || 'editor.json',
-      keep_going: $('keepGoing').checked, continue_on_block: $('continueOnBlock').checked });
-    const failed = reply.commands.filter((c) => !c.ok).length;
-    $('runStatus').innerHTML = `${reply.commands.length}/${scn.commands.length} commands run, `
-      + `<span class="${failed ? 'bad' : 'ok'}">${failed} failed</span> · ${reply.targets.length} arm targets · ${((performance.now() - t0) / 1000).toFixed(1)}s`;
-    if (reply.report) $('report').href = reply.report;
-    $('report').style.display = reply.report ? '' : 'none';
-    $('outcomes').innerHTML = reply.commands.map((c, i) => `<div class="small">${i + 1}. ${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${c.cmd} <span class="muted">${c.seconds}s</span>${c.error ? `<div class="bad">${esc(c.error)}</div>` : ''}</div>`).join('');
-    const levels = { ERROR: 'bad', WARNING: 'warn', DEBUG: 'muted' };
-    $('events').innerHTML = reply.events.map((e) => `<div class="${levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}</div>`).join('');
-    startPlayback(reply);
-  } catch (e) { $('runStatus').innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+    const reply = await api('/api/random', { scenario: scn, what, count, seed: seedInput.value || null, type: null });
+    const added = reply.objects ?? reply.commands;
+    if (!added.length) { toast(what === 'object' ? 'No free place for a random object (space or capsule budget)' : 'No valid random configuration found', true); return; }
+    if (what === 'object') { scn.objects.push(...added); select('object', scn.objects.length - 1); edited(); }
+    else { scn.commands.push(...added); select('command', scn.commands.length - 1); edited(false); }
+    toast(`Added ${added.length}${added.length < count ? ` of ${count}` : ''} random ${what === 'object' ? 'object' : `${what} command`}${added.length > 1 ? 's' : ''} · seed ${reply.seed}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ----- run on machines ----------------------------------------------------------------------------
+let robots = [];                 // robot ssh destinations offered as run targets
+let chosen = new Set([LOCAL]);   // the targets ticked
+let plannerState = '…';          // this machine's planner state
+let runId = null, runTimer = null, autoPlayed = false;
+let history = [], openRun = null;  // archived runs; the one expanded in History
+
+/** Reads a per-viewer setting. key: its name; fallback: used when missing or unreadable. Returns: the value. */
+function loadSetting(key, fallback) {
+  try { const v = localStorage.getItem(`worldsim.${key}`); return v === null ? fallback : JSON.parse(v); } catch { return fallback; }
+}
+
+/** Saves a per-viewer setting (ignored where storage is blocked). key: its name; value: any JSON value. */
+function saveSetting(key, value) { try { localStorage.setItem(`worldsim.${key}`, JSON.stringify(value)); } catch { /* blocked */ } }
+
+/** The machine checkboxes: this Mac (with its planner state) and every robot. */
+function renderTargets() {
+  $('targets').innerHTML = [LOCAL, ...robots].map((t) => `<div class="row">
+    <label style="width:auto"><input type="checkbox" data-target="${esc(t)}" ${chosen.has(t) ? 'checked' : ''}> ${t === LOCAL ? 'this Mac' : esc(t)}</label>
+    ${t === LOCAL ? `<span class="small muted">planner ${esc(plannerState)}</span>` : `<button class="mini" data-remove="${esc(t)}" title="Remove from the list">✕</button>`}</div>`).join('');
+}
+
+/** Starts a run of the edited scenario on the ticked machines and follows it. */
+async function runPlanner() {
+  if (!chosen.size) { toast('Tick a machine to run on', true); return; }
+  $('run').disabled = true;
+  try {
+    const meta = await api('/api/run', { scenario: scn, file: fileName, note: $('note').value,
+      keep_going: $('keepGoing').checked, continue_on_block: $('continueOnBlock').checked,
+      targets: [LOCAL, ...robots].filter((t) => chosen.has(t)), robot_checkout: $('checkout').value.trim() });
+    runId = meta.id; autoPlayed = false;
+    $('runView').innerHTML = runDetails(meta, true);
+    pollRun();
+  } catch (e) { toast(e.message, true); }
   $('run').disabled = false;
+}
+
+/** Follows the current run until every machine finished; plays the first finished one. */
+async function pollRun() {
+  clearTimeout(runTimer);
+  try {
+    const meta = await api(`/api/run?id=${encodeURIComponent(runId)}`);
+    $('runView').innerHTML = runDetails(meta, true);
+    const done = Object.keys(meta.targets).filter((n) => meta.targets[n].status === 'done');
+    if (!autoPlayed && done.length) { autoPlayed = true; playTarget(meta.id, done.includes(LOCAL) ? LOCAL : done[0]); }
+    if (Object.values(meta.targets).some((t) => t.status === 'queued' || t.status === 'running')) runTimer = setTimeout(pollRun, RUN_POLL_MS);
+    else loadHistory();
+  } catch (e) { toast(e.message, true); }
+}
+
+/** HTML of a run's machines: state, timing, play / report, errors. meta: the run; live: show progress lines. Returns: HTML. */
+function runDetails(meta, live) {
+  const lines = Object.entries(meta.targets).map(([name, t]) => {
+    const s = t.summary;
+    const state = t.status === 'done'
+      ? `${s.failed ? `<span class="bad">${s.failed} failed</span>` : '<span class="ok">✓</span>'} planner ${s.planner_s.toFixed(1)}s · estimate ${s.estimate_s.toFixed(1)}s`
+      : t.status === 'failed' ? '<span class="bad">failed</span>' : `<span class="warn">${esc(t.stage || t.status)}…</span>`;
+    const actions = t.status !== 'done' ? '' : ` <button class="mini" data-play="${esc(meta.id)}|${esc(name)}">▶ play</button>
+      <a class="small" target="_blank" href="/runs/${encodeURIComponent(meta.id)}/${encodeURIComponent(name)}.html">report ↗</a>`;
+    const tail = live && t.status === 'running' && t.log?.length ? `<div class="small muted mono">${esc(t.log[t.log.length - 1])}</div>` : '';
+    const error = !t.error ? '' : `<div class="small bad">${esc(t.error)}</div>`
+      + (t.log?.length ? `<details class="small"><summary>log</summary><pre>${esc(t.log.slice(-60).join('\n'))}</pre></details>` : '');
+    return `<div class="target"><b>${esc(name)}</b> ${state}${actions}${tail}${error}</div>`;
+  });
+  return lines.join('') + timingTable(meta);
+}
+
+/** Seconds per command on each finished machine of a run, side by side. meta: the run. Returns: HTML ('' if none finished). */
+function timingTable(meta) {
+  const done = Object.entries(meta.targets).filter(([, t]) => t.status === 'done');
+  if (!done.length) return '';
+  const rows = [];
+  for (let c = 0; c < Math.max(...done.map(([, t]) => t.summary.commands.length)); c++) {
+    const cells = done.map(([, t]) => t.summary.commands[c]);
+    rows.push(`<tr><td>${c + 1}. ${esc(cells.find(Boolean).cmd)}</td>${cells.map((x) => !x ? '<td>—</td>'
+      : `<td>${x.planner_s.toFixed(2)} / ${x.estimate_s.toFixed(2)}${x.ok ? '' : ' <span class="bad">✗</span>'}</td>`).join('')}</tr>`);
+  }
+  rows.push(`<tr class="muted"><td>planner build</td>${done.map(([, t]) => `<td>${t.summary.build_s.toFixed(1)}</td>`).join('')}</tr>`);
+  return `<table class="timing" title="planner: time in planner calls · estimate: robot time (replays: BufferingPlayer wall time)">
+    <tr><th>seconds: planner / estimate</th>${done.map(([n]) => `<th>${esc(n)}</th>`).join('')}</tr>${rows.join('')}</table>`;
+}
+
+/** Plays one machine's path of a run. id: run id; target: machine name; withScenario: first load the run's scenario. */
+async function playTarget(id, target, withScenario = false) {
+  try {
+    if (withScenario) await openRunScenario(id);
+    const reply = await api(`/api/playback?run=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}`);
+    exitPlayback();
+    startPlayback(reply, `${target} · ${id}`);
+  } catch (e) { toast(e.message, true); }
+}
+
+/** Loads the scenario exactly as a run planned it. id: run id. */
+async function openRunScenario(id) {
+  if (!mayDiscard()) throw new Error('Kept the scenario being edited');
+  const reply = await fetch(`/runs/${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
+  if (!reply.ok) throw new Error(`The scenario of run ${id} is missing`);
+  loadScenario(await reply.json(), history.find((m) => m.id === id)?.file ?? '');
+}
+
+// ----- history ------------------------------------------------------------------------------------
+/** Fetches the archived runs into the History list. */
+async function loadHistory() {
+  try { history = (await api('/api/runs')).runs; renderHistory(); } catch (e) { toast(e.message, true); }
+}
+
+/** The History rows; the expanded one with its machines, timing and actions. */
+function renderHistory() {
+  $('history').innerHTML = history.slice(0, HISTORY_ROWS).map((m) => {
+    const chips = Object.entries(m.targets).map(([n, t]) => {
+      const cls = t.status === 'done' ? (t.summary.failed ? 'bad' : 'ok') : t.status === 'failed' ? 'bad' : 'warn';
+      return `<span class="${cls}">${esc(n)}${t.status === 'done' ? ` ${t.summary.planner_s.toFixed(1)}s` : ` ${t.status}`}</span>`;
+    }).join(' · ');
+    const body = openRun !== m.id ? '' : `<div class="form" style="margin:0 8px 8px">${runDetails(m, false)}
+      <div class="row"><button data-open-scn="${esc(m.id)}">Open its scenario</button><button data-del="${esc(m.id)}">Delete run</button></div></div>`;
+    return `<div class="item ${openRun === m.id ? 'sel' : ''}" data-run="${esc(m.id)}" style="display:block">
+      <div><span class="muted small">${esc(m.created)}</span> ${esc(m.name)}</div>
+      <div class="small">${chips}${m.note ? ` <span class="muted">— ${esc(m.note)}</span>` : ''}</div></div>${body}`;
+  }).join('') || '<div class="empty">No runs yet.</div>';
 }
 
 let playing = false, playPos = 0, lastFrame = 0;
 
-/** Shows a run: arm path, timeline. reply: /api/run reply. */
-function startPlayback(reply) {
+/** Shows a machine's run: arm path, timeline, command outcomes and messages. reply: /api/playback reply; label: what is played. */
+function startPlayback(reply, label) {
   play = reply; gizmo.detach();
+  $('outcomes').innerHTML = `<div class="small muted">Playing ${esc(label)}</div>` + reply.commands.map((c, i) => `<div class="small">${i + 1}.
+    ${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${c.cmd} <span class="muted">${c.seconds}s</span>${c.error ? `<div class="bad">${esc(c.error)}</div>` : ''}</div>`).join('');
+  const levels = { ERROR: 'bad', WARNING: 'warn', DEBUG: 'muted' };
+  $('events').innerHTML = reply.events.map((e) => `<div class="${levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}</div>`).join('');
   $('hud').style.display = 'block';
   $('timeline').max = reply.poses.length - 1; playPos = 0; playing = true; $('play').textContent = '⏸';
   const points = reply.tcp_mm.map((p) => new THREE.Vector3(p[0] / 1000, p[1] / 1000, p[2] / 1000));
@@ -891,9 +1071,9 @@ function showSample(k) {
 
 // ----- wiring -----------------------------------------------------------------------------------
 $('open').onclick = () => openFile($('files').value);
-$('new').onclick = () => loadScenario({ name: 'New scenario' }, '');
+$('new').onclick = () => { if (mayDiscard()) loadScenario({ name: 'New scenario' }, ''); };
 $('save').onclick = save;
-$('name').addEventListener('input', () => { scn.name = $('name').value; });
+$('name').addEventListener('input', () => { scn.name = $('name').value; dirty = true; });
 $('moveBillie').onclick = () => select(sel.kind === 'billie' ? null : 'billie');
 document.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => addObject(b.dataset.add));
 $('objects').addEventListener('click', (e) => { const row = e.target.closest('[data-obj]'); if (row) select('object', +row.dataset.obj); });
@@ -916,6 +1096,40 @@ $('addPose').onclick = () => {
 };
 $('addReplay').onclick = () => { scn.commands.push({ cmd: 'replay_policy', repo_id: 'bellboy-robotics/', speed: 1.0, transform: 'poses' }); select('command', scn.commands.length - 1); edited(false); };
 $('run').onclick = runPlanner;
+$('randObject').onclick = () => addRandom('object', 1, $('objSeed'));
+$('randMotion').onclick = () => addRandom($('randKind').value, Math.max(1, parseInt($('randCount').value) || 1), $('motionSeed'));
+$('targets').addEventListener('change', (e) => {
+  const t = e.target.dataset.target; if (t === undefined) return;
+  if (e.target.checked) chosen.add(t); else chosen.delete(t);
+  saveSetting('chosen', [...chosen]);
+});
+$('targets').addEventListener('click', (e) => {
+  const t = e.target.dataset.remove; if (t === undefined) return;
+  robots = robots.filter((r) => r !== t); chosen.delete(t);
+  saveSetting('robots', robots); saveSetting('chosen', [...chosen]); renderTargets();
+});
+$('addRobot').onclick = () => {
+  const host = $('newRobot').value.trim(); if (!host) return;
+  if (!robots.includes(host)) robots.push(host);
+  chosen.add(host); $('newRobot').value = '';
+  saveSetting('robots', robots); saveSetting('chosen', [...chosen]); renderTargets();
+};
+$('checkout').addEventListener('input', () => saveSetting('checkout', $('checkout').value));
+$('runView').addEventListener('click', (e) => {
+  const p = e.target.dataset.play; if (p) { const [id, t] = p.split('|'); playTarget(id, t); }
+});
+$('history').addEventListener('click', async (e) => {
+  const d = e.target.dataset;
+  if (d.play) { const [id, t] = d.play.split('|'); playTarget(id, t, true); return; }
+  if (d.openScn) { try { await openRunScenario(d.openScn); } catch (err) { toast(err.message, true); } return; }
+  if (d.del) {
+    if (!confirm(`Delete run ${d.del} and its reports?`)) return;
+    try { await api('/api/runs/delete', { id: d.del }); if (openRun === d.del) openRun = null; loadHistory(); } catch (err) { toast(err.message, true); }
+    return;
+  }
+  const row = e.target.closest('[data-run]');
+  if (row && !e.target.closest('a')) { openRun = openRun === row.dataset.run ? null : row.dataset.run; renderHistory(); }
+});
 $('modeMove').onclick = () => setGizmoMode('translate');
 $('modeRotate').onclick = () => setGizmoMode('rotate');
 $('focus').onclick = focusBillie;
@@ -952,7 +1166,7 @@ async function pollPlanner() {
     const pill = $('planner');
     pill.textContent = `planner ${planner.startsWith('error') ? 'error' : planner}`; pill.title = planner;
     pill.className = 'pill ' + (planner.startsWith('error') ? 'error' : planner);
-    $('run').disabled = planner !== 'ready';
+    plannerState = planner.startsWith('error') ? 'error' : planner; renderTargets();
     if (planner === 'building') setTimeout(pollPlanner, 2000);
   } catch (e) { setTimeout(pollPlanner, 5000); }
 }
@@ -978,6 +1192,10 @@ async function start() {
   catch (e) { $('loading').textContent = e.message; return; }
   $('loading').remove();
   buildCapsules(); buildSliders(); loadRobot();
+  robots = [...new Set([...model.robots, ...loadSetting('robots', [])])];
+  chosen = new Set(loadSetting('chosen', [LOCAL]).filter((t) => t === LOCAL || robots.includes(t)));
+  $('checkout').value = loadSetting('checkout', model.robot_checkout);
+  renderTargets(); loadHistory();
   const wanted = new URLSearchParams(location.search).get('file');
   const { files } = await api('/api/scenarios');
   $('files').innerHTML = files.map((f) => `<option>${esc(f)}</option>`).join('');
