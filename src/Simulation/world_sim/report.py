@@ -13,6 +13,7 @@ from plotly.subplots import make_subplots
 from scipy.spatial.transform import Rotation
 
 from Simulation.world_sim.analysis import (
+    EEF_LINKS,
     Run,
     capsules,
     dense_path,
@@ -22,8 +23,10 @@ from Simulation.world_sim.analysis import (
     planner_gripper_box,
     tcp_poses,
 )
-from Simulation.world_sim.mesh_check import EXACT_WITHIN_M, capsule_point_distances, pose_points
+from Simulation.world_sim.mesh_check import EXACT_WITHIN_M, capsule_point_distances, mesh_points, pose_points
+from Simulation.world_sim.pushables import push_events, simulate_pushes
 from Simulation.world_sim.recording import BRAIN_TICK_RATE
+from Simulation.world_sim.world import hinge_of
 from Simulation.world_sim.timing_report import (
     build_html,
     call_stats_html,
@@ -32,11 +35,14 @@ from Simulation.world_sim.timing_report import (
     log_panel_html,
 )
 
-ROLE_COLORS = {"avoid": "#d62728", "eef_touch": "#2ca02c"}
+ROLE_COLORS = {"avoid": "#d62728", "eef_touch": "#2ca02c", "push": "#a0703c"}
 # Real-mesh points inside an avoid object (the editor draws such links magenta too).
 MESH_INSIDE_COLOR = "#d020d0"
 # Warning boxes at the top of the report (inline: the page has no stylesheet for them).
 _WARN_STYLE = "border:2px solid #d62728;background:#fff0f0;padding:8px 12px;margin:8px 0;font-size:14px"
+# [mm], [deg] A pose command whose IK solution ends farther than this from its target is reported as not
+# reached (the planner returns its best solution without refusing); well above the solver's own residual.
+TARGET_TOLERANCE_MM, TARGET_TOLERANCE_DEG = 5.0, 2.0
 COMMAND_COLORS = ["#1f77b4", "#ff7f0e", "#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22", "#7f7f7f"]
 
 
@@ -230,7 +236,8 @@ def _mm(value: float) -> str:
 
 
 def _mesh_warnings_html(run: Run, metrics: dict) -> str:
-    """Warnings where the planner's capsules hide a real contact, and when its gripper was the box fallback.
+    """Warnings where the planner's capsules hide a real contact, and about the gripper geometry (see
+    _gripper_warnings_html).
 
     run: The run. metrics: From point_metrics.
     Returns: HTML fragment ("" when nothing to warn about).
@@ -238,23 +245,41 @@ def _mesh_warnings_html(run: Run, metrics: dict) -> str:
     mesh, capsule = metrics["mesh_avoid_mm"], metrics["avoid_mm"]
     hidden = np.flatnonzero((mesh < 0) & (capsule >= 0))  # real mesh inside, every planner capsule clear
     items = []
-    for group in np.split(hidden, np.flatnonzero(np.diff(hidden) > 1) + 1) if len(hidden) else []:
-        i = group[np.argmin(mesh[group])]
+    # One item per run of consecutive targets of one command (a detour right after a pose is its own item).
+    cuts = np.flatnonzero((np.diff(hidden) > 1) | (np.diff(run.command[hidden]) != 0)) + 1
+    for group in np.split(hidden, cuts) if len(hidden) else []:
+        i, c = group[np.argmin(mesh[group])], run.command[group[0]]
         span = f"target {group[0]}" if len(group) == 1 else f"targets {group[0]}-{group[-1]}"
-        items.append(f"<li><b>{span}</b>: {html.escape(metrics['mesh_link'][i])} real mesh {mesh[i]:.1f} mm inside "
-                     f"while planner capsule reads {metrics['mesh_capsule_mm'][i]:+.1f} mm (deepest at target {i})</li>")  # fmt: skip
+        items.append(f"<li><b>cmd {c} {html.escape(run.commands[c]['spec']['cmd'])}, {span}</b>: "
+                     f"{html.escape(metrics['mesh_link'][i])} real mesh {mesh[i]:.1f} mm inside while its planner capsule "
+                     f"reads {metrics['mesh_capsule_mm'][i]:+.1f} mm (deepest on the move into target {i})</li>")  # fmt: skip
     out = ""
     if items:
         out += (f"<div style='{_WARN_STYLE}'><b>Real arm geometry enters an avoid object where the planner model reads clear</b>"
                 f" ({len(hidden)} targets; meshes of this machine's URDF posed with the run's arm model):"
                 f"<ul>{''.join(items)}</ul></div>")  # fmt: skip
+    return out + _gripper_warnings_html(run)
+
+
+def _gripper_warnings_html(run: Run) -> str:
+    """Warnings when the planner's gripper was its box fallback, or this machine's URDF has no gripper mesh
+    (then the real-mesh numbers leave the gripper out).
+
+    run: The run. Returns: HTML fragment ("" when nothing to warn about).
+    """
+    gripper, out = EEF_LINKS[0], ""
+    has_mesh = gripper in mesh_points().link_names
+    if not has_mesh:
+        out += (f"<div style='{_WARN_STYLE}'><b>This machine's URDF has no gripper collision mesh</b> ({gripper} is not a "
+                "mesh there, e.g. its STL is missing): the real-mesh numbers here leave the gripper and camera out "
+                "(shown as —).</div>")  # fmt: skip
     if planner_gripper_box(run):
-        g = run.model.link_names.index("link_gripper_and_camera")
+        g = run.model.link_names.index(gripper)
         out += (f"<div style='{_WARN_STYLE}'><b>The planner on {html.escape(str(run.machine.get('host', '?')))} modelled the gripper "
-                "as its bounding box</b> (its gripper mesh was missing there): link_gripper_and_camera capsule radius "
+                f"as its bounding box</b> (its gripper mesh was missing there): {gripper} capsule radius "
                 f"{run.model.capsule_radius[g] * 1000:.1f} mm, height {run.model.capsule_height[g] * 1000:.1f} mm at the box "
-                "mount, which misses the camera bracket. Its gripper clearances do not describe the real gripper; "
-                "the real-mesh numbers here do.</div>")  # fmt: skip
+                "mount, which misses the camera bracket. Its gripper clearances do not describe the real gripper"
+                f"{'; the real-mesh numbers here do' if has_mesh else ''}.</div>")  # fmt: skip
     return out
 
 
@@ -279,30 +304,47 @@ def _target_clearance_html(run: Run, metrics: dict) -> str:
 
 
 def summary_html(run: Run, metrics: dict) -> str:
-    """Real-geometry warnings, commands table (outcome, time, closest approach per command) and the operator messages.
+    """Real-geometry and target-miss warnings, commands table (outcome, time, target miss, closest approach per
+    command) and the operator messages (DEBUG ones greyed: the IK miss is only logged at DEBUG).
 
     run: The run. metrics: From point_metrics.
     Returns: HTML fragment.
     """
-    rows = []
+    rows, misses, bad = [], [], "<b style='color:#d62728'>{}</b>"
     for c, outcome in enumerate(run.commands):
         sel = run.command == c
         closest = f"{metrics['avoid_mm'][sel].min():.0f}" if sel.any() and np.isfinite(metrics['avoid_mm'][sel]).any() else "—"
-        mesh = _mm(metrics["mesh_avoid_mm"][sel].min()) if sel.any() else "—"
+        real = metrics["mesh_avoid_mm"][sel].min() if sel.any() else np.inf
         kinds_of_command = [k for k, chosen in zip(run.kind, sel) if chosen]
         kinds = ", ".join(f"{k}×{kinds_of_command.count(k)}" for k in dict.fromkeys(kinds_of_command))
-        status = "ok" if outcome["ok"] else f"<b style='color:#d62728'>FAILED</b>: {html.escape(outcome['error'])}"
+        # A pose command's own target (its detour frames are "detour"): how far its IK solution ends from it.
+        pose = np.flatnonzero(sel & (np.asarray(run.kind) == "pose"))
+        miss_mm, miss_deg = (metrics["pos_err_mm"][pose].max(), np.nanmax(metrics["ori_err_deg"][pose])) if len(pose) \
+            else (np.nan, np.nan)  # fmt: skip
+        status = []
+        if not outcome["ok"]:
+            status.append(f"{bad.format('FAILED')}: {html.escape(outcome['error'])}")
+        if miss_mm > TARGET_TOLERANCE_MM or miss_deg > TARGET_TOLERANCE_DEG:
+            status.append(f"{bad.format('not reached')} ({miss_mm:.1f} mm, {miss_deg:.1f}° from the target)")
+            misses.append(f"cmd {c} ({miss_mm:.1f} mm, {miss_deg:.1f}°)")
+        if real < 0:
+            status.append(f"{bad.format('collides')} (real mesh {real:.1f} mm inside)")
         spec = html.escape(", ".join(f"{k}={v}" for k, v in outcome["spec"].items()))
-        rows.append(f"<tr><td>{c}</td><td>{spec}</td><td>{status}</td><td>{outcome['seconds']:.1f}</td>"
-                    f"<td>{sel.sum()}</td><td>{kinds}</td><td>{closest}</td><td>{mesh}</td></tr>")  # fmt: skip
+        miss = f"{miss_mm:.1f} / {miss_deg:.1f}" if len(pose) else "—"
+        rows.append(f"<tr><td>{c}</td><td>{spec}</td><td>{'; '.join(status) or 'ok'}</td><td>{outcome['seconds']:.1f}</td>"
+                    f"<td>{miss}</td><td>{sel.sum()}</td><td>{kinds}</td><td>{closest}</td><td>{_mm(real)}</td></tr>")  # fmt: skip
+    warning = "" if not misses else (
+        f"<div style='{_WARN_STYLE}'><b>The planner returned a solution away from the target without refusing</b> "
+        f"(beyond {TARGET_TOLERANCE_MM:.0f} mm / {TARGET_TOLERANCE_DEG:.0f}°; the robot would move there): {', '.join(misses)}.</div>"
+    )  # fmt: skip
     events = "".join(
-        f"<tr><td>{e['command']}</td><td>{e['level']}</td><td>{html.escape(e['message'])}</td></tr>"
-        for e in run.events if e["level"] != "DEBUG"
-    )
+        f"<tr{' style=color:#888' if e['level'] == 'DEBUG' else ''}><td>{e['command']}</td><td>{e['level']}</td>"
+        f"<td>{html.escape(e['message'])}</td></tr>" for e in run.events
+    )  # fmt: skip
     return (
-        f"{_mesh_warnings_html(run, metrics)}"
-        "<table><tr><th>#</th><th>command</th><th>result</th><th>plan s</th><th>targets</th><th>moves</th>"
-        f"<th>closest to avoid (mm)</th><th>real mesh (mm)</th></tr>{''.join(rows)}</table>"
+        f"{warning}{_mesh_warnings_html(run, metrics)}"
+        "<table><tr><th>#</th><th>command</th><th>result</th><th>plan s</th><th>target miss (mm / °)</th><th>targets</th>"
+        f"<th>moves</th><th>closest to avoid (mm)</th><th>real mesh (mm)</th></tr>{''.join(rows)}</table>"
         f"{_target_clearance_html(run, metrics)}"
         f"<h3>Messages</h3><table><tr><th>cmd</th><th>level</th><th>message</th></tr>{events}</table>"
     )
@@ -384,6 +426,45 @@ def timing_html(run: Run) -> str:
     )
 
 
+def pushes_section(run: Run, metrics: dict) -> tuple[str, go.Figure | None]:
+    """The doors and handles part of the report: how each turned, blocked pushes, which links pushed.
+
+    run: The run. metrics: point_metrics(run) (its dense path).
+    Returns: (HTML fragment, "" without doors or handles; angle-over-path figure or None).
+    """
+    pushes = simulate_pushes(run.model, run.objects, run.start_deg, run.joints_deg)
+    if pushes is None:
+        return "", None
+    events = push_events(pushes, metrics["owner"], run.command)
+    rows = []
+    for e in events:
+        links = ", ".join(e["links"]) or "—"
+        others = [link for link in e["links"] if link not in EEF_LINKS]
+        state = f'<b style="color:#c62f2f">blocked: arm {e["blocked_mm"]:.0f} mm inside at its limit</b>' if e["blocked_mm"] > 0 else "free"
+        note = ' <b style="color:#c27a00">(not the end effector)</b>' if others else ""
+        rows.append(f"<tr><td>{html.escape(e['object'])}</td><td>{e['command'] + 1}</td><td>{e['first_target']}-{e['last_target']}</td>"
+                    f"<td>{e['from_deg']:.1f}° → {e['to_deg']:.1f}°</td><td>{state}</td><td>{html.escape(links)}{note}</td></tr>")  # fmt: skip
+    finals = ", ".join(f"{html.escape(n)} {pushes['angles_deg'][-1, i]:.1f}°" for i, n in enumerate(pushes["names"]))
+    table = ("<table><tr><th>object</th><th>cmd</th><th>targets</th><th>turned</th><th>push</th><th>pushed by</th></tr>"
+             + "".join(rows) + "</table>") if rows else "<p>The arm never touched them.</p>"  # fmt: skip
+    section = f"<h3>Doors and handles</h3><p>End angles: {finals}. Simulated by pushables.py; the planner does not see them.</p>{table}"
+    fig = go.Figure()
+    for i, name in enumerate(pushes["names"]):
+        spec = next(o["spec"] for o in run.objects if o["name"] == name)
+        _, _, lo, hi = hinge_of(spec, 0.0)
+        color = COMMAND_COLORS[i % len(COMMAND_COLORS)]
+        fig.add_trace(go.Scatter(y=pushes["angles_deg"][:, i], mode="lines", name=f"{name} angle", line={"color": color}))
+        blocked = np.flatnonzero(pushes["blocked_mm"][:, i] > 0)
+        if len(blocked):
+            fig.add_trace(go.Scatter(x=blocked, y=pushes["angles_deg"][blocked, i], mode="markers", name=f"{name} blocked",
+                                     marker={"color": "#c62f2f", "size": 6}))  # fmt: skip
+        for limit in (lo, hi):
+            fig.add_hline(y=limit, line={"color": color, "dash": "dash", "width": 1})
+    fig.update_layout(title="Door and handle angles along the path (dashed: limits)", xaxis_title="path sample",
+                      yaxis_title="angle from the initial pose (deg)", height=420)  # fmt: skip
+    return section, fig
+
+
 def write_report(run: Run, output_path: str, open_browser: bool = True) -> None:
     """Writes the HTML report: summary, then the 3D scene and the timeline behind toggle buttons.
 
@@ -391,6 +472,9 @@ def write_report(run: Run, output_path: str, open_browser: bool = True) -> None:
     """
     metrics = point_metrics(run)
     views = [("scene", "3D scene", scene_figure(run, metrics)), ("timeline", "Timeline", timeline_figure(run, metrics))]
+    pushes_html, pushes_fig = pushes_section(run, metrics)
+    if pushes_fig is not None:
+        views.append(("pushes", "Doors and handles", pushes_fig))
     gantt = gantt_figure(run, COMMAND_COLORS)
     if gantt is not None:  # results written before the planner calls had start times have none
         views.append(("planner_timeline", "Planner timeline", gantt))
@@ -403,7 +487,7 @@ def write_report(run: Run, output_path: str, open_browser: bool = True) -> None:
     page = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{html.escape(run.name)}</title>
 <style>body{{font-family:sans-serif;padding:16px}} table{{border-collapse:collapse;margin-bottom:12px;font-size:13px}}
 td,th{{border:1px solid #ccc;padding:3px 8px;text-align:left;vertical-align:top}} button{{margin:4px;padding:6px 14px}}</style>
-</head><body><h2>{html.escape(run.name)}</h2>{summary_html(run, metrics)}{timing_html(run)}<div>{buttons}</div>{divs}
+</head><body><h2>{html.escape(run.name)}</h2>{summary_html(run, metrics)}{pushes_html}{timing_html(run)}<div>{buttons}</div>{divs}
 <script>function show(id){{document.querySelectorAll('div.view').forEach(d=>d.style.display='none');
 var v=document.getElementById(id);v.style.display='block';v.querySelectorAll('.plotly-graph-div').forEach(g=>Plotly.Plots.resize(g));}}</script>
 </body></html>"""

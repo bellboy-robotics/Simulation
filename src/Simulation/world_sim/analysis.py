@@ -1,4 +1,5 @@
-"""Reads a plan step's results and measures the arm's path against the world objects (NumPy only)."""
+"""Reads a plan step's results and measures the arm's path against the world objects (NumPy; the real-mesh
+checks through mesh_check also load this machine's URDF meshes with trimesh / yourdfpy)."""
 
 import json
 from dataclasses import dataclass, field

@@ -20,6 +20,14 @@ done <"/proc/$PID/environ"
 if [ ! -f "$BILLIE_ENVDIR/urdf/$XARM_SN.urdf" ] && [ -f "$DIR/env/urdf/$XARM_SN.urdf" ]; then
     echo "No $XARM_SN.urdf in $BILLIE_ENVDIR/urdf; using the synced copy in $DIR/env/urdf" >&2
     export BILLIE_ENVDIR="$DIR/env"
+    # robot.py syncs the gripper mesh with this copy; without it the planner would use its gripper box.
+    if [ ! -f "$BILLIE_ENVDIR/urdf/meshes/ee-rome-v0-lod.stl" ]; then
+        echo "No gripper mesh $BILLIE_ENVDIR/urdf/meshes/ee-rome-v0-lod.stl; re-run robot.py to sync it" >&2
+        exit 1
+    fi
+elif [ ! -f "$BILLIE_ENVDIR/urdf/meshes/ee-rome-v0-lod.stl" ]; then
+    # The robot's own env, as its live planner sees it: plan with the same box, but say so up front.
+    echo "WARNING: no gripper mesh in $BILLIE_ENVDIR/urdf/meshes; the planner uses its gripper box" >&2
 fi
 
 # The synced code wins over the image's /app code (the image may lack the world-collision POC).

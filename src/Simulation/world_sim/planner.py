@@ -117,23 +117,25 @@ class SimPlanner:
         window = capture.open_window(self.build["built_at"])
         window.log[:0] = _import_window.log  # the lines logged while the planner was imported
         cache_files_before = _count_files(self._cache_dir())
-        self._build_ik(window)
-        self.model: CollisionModel = self._phase("export_model", lambda: world_collision_poc.export_collision_model(
-            self.resolver.robot, self.resolver.robot_coll
-        ))  # fmt: skip
-        self._tcp_index = self.model.link_names.index(TCP_LINK)
-        self._transit = self._phase("transit_build", lambda: build_transit_solver(
-            self.resolver.robot, self.resolver.robot_coll
-        ))  # fmt: skip
-        # The brain's cached arm model, read by the arm-move guard, detours and reroutes.
-        pyroki_world_poc._model_cache = self.model
-        self.set_obstacles(np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
-        # The robot compiles the transit planner at startup (warm_up_in_background), not on the first replay.
-        self._phase("transit_warmup", lambda: self._timed(
-            "build_transit_planner", 0, lambda: self.plan_transit(np.zeros(6), np.full(6, 10.0))
-        ))  # fmt: skip
+        try:  # a failed build (e.g. the editor's, which keeps running) must not leave its window collecting
+            self._build_ik(window)
+            self.model: CollisionModel = self._phase("export_model", lambda: world_collision_poc.export_collision_model(
+                self.resolver.robot, self.resolver.robot_coll
+            ))  # fmt: skip
+            self._tcp_index = self.model.link_names.index(TCP_LINK)
+            self._transit = self._phase("transit_build", lambda: build_transit_solver(
+                self.resolver.robot, self.resolver.robot_coll
+            ))  # fmt: skip
+            # The brain's cached arm model, read by the arm-move guard, detours and reroutes.
+            pyroki_world_poc._model_cache = self.model
+            self.set_obstacles(np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
+            # The robot compiles the transit planner at startup (warm_up_in_background), not on the first replay.
+            self._phase("transit_warmup", lambda: self._timed(
+                "build_transit_planner", 0, lambda: self.plan_transit(np.zeros(6), np.full(6, 10.0))
+            ))  # fmt: skip
+        finally:
+            capture.close_window(window)
         self.timings = [t for t in self.timings if t["call"] != "transit"]
-        capture.close_window(window)
         self._finish_build(window, cache_files_before)
 
     @staticmethod
@@ -148,14 +150,18 @@ class SimPlanner:
         """
         capture.thread_stats.clear()
         capture.thread_span.clear()
-        t0 = time.time()
-        self.resolver = IKResolver(_NoNode())
-        self.resolver._ready.wait()
-        ready = time.time()
-        # The build thread logs "compilation complete" right after setting _ready: keep that line too.
-        for thread in threading.enumerate():
-            if thread.name == "pyroki-compile":
-                thread.join(timeout=_BUILD_THREAD_JOIN_S)
+        capture.tracking = True
+        try:
+            t0 = time.time()
+            self.resolver = IKResolver(_NoNode())
+            self.resolver._ready.wait()
+            ready = time.time()
+            # The build thread logs "compilation complete" right after setting _ready: keep that line too.
+            for thread in threading.enumerate():
+                if thread.name == "pyroki-compile":
+                    thread.join(timeout=_BUILD_THREAD_JOIN_S)
+        finally:
+            capture.tracking = False
         phases = self._ik_phases(t0, ready, window.log)
         total = phases[-1]
         self.timings.append({"call": "build_ik_solvers", "command": -1, "n": 0, "seconds": ready - t0, "start": t0,
@@ -168,7 +174,9 @@ class SimPlanner:
         """The resolver build's phases, from what its threads logged and compiled.
 
         ik_setup runs from the start until the first warm-up thread starts; each warm-up spans its thread's
-        first to last line or JAX event; ik_total is the whole wait. Compile stats are each thread's events.
+        first to last line or JAX event; ik_total is the whole wait. Compile stats are each thread's events:
+        ik_setup's are all of the pyroki-compile thread's, including what it compiles after the warm-ups
+        (with DEBUG_PYROKI_PLANNER, the batch near-collision check), outside its from-to span.
 
         t0: When the resolver was created, epoch s. ready: When it reported ready, epoch s.
         log: The build's log lines so far (see planner_capture.CaptureWindow.log).
@@ -297,13 +305,14 @@ class SimPlanner:
         ))  # fmt: skip
         return np.rad2deg(np.asarray(joints_rad, dtype=np.float64)), np.asarray(large_motion)
 
-    def plan_transit(self, start_deg: np.ndarray, goal_deg: np.ndarray) -> np.ndarray:
+    def plan_transit(self, start_deg: np.ndarray, goal_deg: np.ndarray, call: str = "transit") -> np.ndarray:
         """Plans a joint path around the obstacles, like pyroki_world_poc.plan_transit.
 
         start_deg, goal_deg: (6,) end joints of the path, degrees.
+        call: Name of this use in the timings ("transit" for replay reroutes, "detour" for single moves).
         Returns: (TRANSIT_STEPS, 6) path in degrees; not guaranteed clear, the caller checks it.
         """
-        path = self._timed("transit", 1, lambda: np.asarray(self._transit(
+        path = self._timed(call, 1, lambda: np.asarray(self._transit(
             jnp.asarray(np.deg2rad(start_deg), dtype=jnp.float32),
             jnp.asarray(np.deg2rad(goal_deg), dtype=jnp.float32),
             world_collision_poc.current_world_capsules(),

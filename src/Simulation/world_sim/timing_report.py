@@ -24,8 +24,13 @@ PHASE_TEXT = {
     "transit_build": "transit planner setup",
     "transit_warmup": "transit planner: first call compiles or loads it",
 }
-_HIGHLIGHT = "background:#fff3cd"  # log lines about compiles, the JAX cache, waits or fallbacks
+# Background of the log lines about compiles, the JAX cache, waits or fallbacks (planner_capture.NOTABLE).
+_HIGHLIGHT = "background:#fff3cd"
+# Style of the notes above the build table (build reused / built long before the run): amber, like a warning.
 _BANNER = "border:2px solid #e0a800;background:#fff8e1;padding:8px 12px;margin:8px 0;font-size:14px"
+# [s] Gap between the build's end and the run's start above which the build is noted as done before the run
+# (an editor builds at start-up); smaller gaps are the plan step's own setup between the two.
+_BUILT_BEFORE_S = 5
 
 
 def _verdict(row: dict) -> str:
@@ -63,7 +68,7 @@ def build_html(run: Run) -> str:
         out += (f"<div style='{_BANNER}'><b>Planner built before this run</b> and reused (built "
                 f"{build['before_run_s']:.0f}s before this run started, by an earlier run of this process): "
                 "this run did not wait for the build below.</div>")  # fmt: skip
-    elif build.get("before_run_s", 0) - build.get("total_s", 0) > 5:
+    elif build.get("before_run_s", 0) - build.get("total_s", 0) > _BUILT_BEFORE_S:
         out += (f"<div style='{_BANNER}'>Planner built {build['before_run_s'] - build['total_s']:.0f}s before this "
                 "run started (e.g. at editor start); this is its first run.</div>")  # fmt: skip
     rows = []
@@ -149,9 +154,9 @@ def command_split_html(run: Run) -> str:
     """Per command: planner time, JAX compile inside it and the rest (compute), with and without obstacles.
 
     run: The run.
-    Returns: HTML fragment ("" without planner calls).
+    Returns: HTML fragment ("" without planner calls or their compile times).
     """
-    if not run.timings:
+    if not any("compile_s" in t for t in run.timings):  # results from before compile times were recorded
         return ""
     free = run.no_obstacles
     head = "<th>planner s</th><th>compile s</th><th>compute s</th><th>result</th>"

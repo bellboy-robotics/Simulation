@@ -193,10 +193,11 @@ def generate(count: int, seed: int, replays: bool) -> str:
     return folder
 
 
-def run_on_robot(host: str, folder: str, robot_checkout: str, poll_s: float = 30.0) -> None:
+def run_on_robot(host: str, folder: str, robot_checkout: str, detour: str, poll_s: float = 30.0) -> None:
     """Runs a sweep on a robot, detached (a dropped ssh does not stop it), then fetches the folder back.
 
     host: ssh destination. folder: Local sweep folder. robot_checkout: See robot.sync.
+    detour: What routes blocked single moves, see commands.DETOUR_PLANNER.
     poll_s: Seconds between progress checks.
     Raises: RuntimeError if the sweep stops before finishing (its log tail says why).
     """
@@ -207,7 +208,7 @@ def run_on_robot(host: str, folder: str, robot_checkout: str, poll_s: float = 30
     runner = f"{robot.ROBOT_DIR}/src/Simulation/world_sim/robot_run_plan.sh"
     launch = f"bash {runner} {robot.ROBOT_DIR} run {remote} > {remote}/sweep.log 2>&1"
     robot._sh(["ssh", host, "docker", "exec", "-d", "-e", "WORLD_SIM_MODULE=Simulation.world_sim.sweep",
-               "billie", "bash", "-c", f"'{launch}'"])  # fmt: skip
+               "-e", f"WORLD_SIM_DETOUR={detour}", "billie", "bash", "-c", f"'{launch}'"])  # fmt: skip
     shown = 0
     while True:
         time.sleep(poll_s)
@@ -241,6 +242,9 @@ def main() -> None:
     for name in ("run", "robot", "summarize"):
         step = sub.add_parser(name)
         step.add_argument("folder", help="sweep folder")
+        if name in ("run", "robot"):
+            step.add_argument("--detour", choices=("transit", "batch_ik"), default="transit",
+                              help="what routes blocked single moves: the fix (transit) or the robot today (batch_ik)")
         if name == "robot":
             step.add_argument("--host", default="bellboy@billie-29.bellboy")
             step.add_argument("--robot-checkout", default=robot.DEFAULT_ROBOT_CHECKOUT)
@@ -251,12 +255,13 @@ def main() -> None:
         return
     folder = os.path.abspath(args.folder)
     if args.step == "run":
+        os.environ["WORLD_SIM_DETOUR"] = args.detour  # read when commands.py is imported, below
         from Simulation.world_sim.sweep_check import run_sweep  # noqa: PLC0415 (imports JAX)
 
         run_sweep(folder)
         return
     if args.step == "robot":
-        run_on_robot(args.host, folder, args.robot_checkout)
+        run_on_robot(args.host, folder, args.robot_checkout, args.detour)
     from Simulation.world_sim.sweep_summary import summarize  # noqa: PLC0415
 
     summarize(folder)

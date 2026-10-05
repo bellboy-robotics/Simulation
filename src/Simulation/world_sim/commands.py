@@ -1,7 +1,8 @@
 """The brain's arm commands (`joints`, `pose`, `replay_policy`), run against the simulated planner and arm.
 
 Ports of billie-onboard (arm_awareness) brain code, keeping its decisions and order:
-- single moves: behaviours/state.py set_state_with_arm_joints + behaviours/arm_detour_poc.py
+- single moves: behaviours/state.py set_state_with_arm_joints + behaviours/arm_detour_poc.py, except
+  that a blocked move is routed by the transit planner (DETOUR_PLANNER); the robot still uses batch IK
 - `pose`: behaviours/state.py set_state_with_arm_pose
 - `joints`: behaviours/arm.py joints / set_smooth_joints
 - `replay_policy`: behaviours/play/replay_policy.py, play/buffering_player.py (pose batches),
@@ -9,6 +10,7 @@ Ports of billie-onboard (arm_awareness) brain code, keeping its decisions and or
 """
 
 import logging
+import os
 
 import numpy as np
 from billie_utils import arm_motion_guard_poc
@@ -21,6 +23,10 @@ from Simulation.world_sim.sim_arm import SimArm
 
 # [m] replay_policy's default final_position_threshold: the replay fails if the arm ends farther away.
 FINAL_POSITION_THRESHOLD_M = 0.05
+# What routes a blocked single move (joints, pose, a replay's move to its first frame):
+# "transit": the transit planner, a joint-space path with fixed start and goal (the fix);
+# "batch_ik": the robot's arm_detour_poc today, batch IK along the straight line's TCP poses.
+DETOUR_PLANNER = os.environ.get("WORLD_SIM_DETOUR", "transit")
 
 
 class SimBrain:
@@ -72,20 +78,35 @@ class SimBrain:
             f"The direct arm move would put {direct.worst_link} {-direct.min_distance_m * 1000:.0f}mm into the "
             "obstacle; planning a detour around it...",
         )
-        # The straight joint line, split into one planner batch, solved in REC mode toward its own TCP poses.
-        line = start[None] + np.arange(1, BATCH_SIZE + 1)[:, None] / BATCH_SIZE * (goal_deg - start)[None]
-        detour, _ = self.planner.batch_solve(start, self.planner.tcp_poses(line), line, call="detour")
-        result = obstacles.check(self.planner.model, np.vstack([start[None], detour, goal_deg[None]]))
+        frames = self._detour_frames(start, goal_deg)
+        result = obstacles.check(self.planner.model, np.vstack([start[None], frames, goal_deg[None]]))
         if not result.clear:
             raise arm_motion_guard_poc.ArmMoveBlockedError(
                 f"Arm move blocked: no detour found around the obstacle ({result.worst_link} would still "
                 f"go {-result.min_distance_m * 1000:.0f}mm in)."
             )
-        for i, frame in enumerate(detour):
+        for i, frame in enumerate(frames):
             self.arm.enqueue(frame, clear_queue=(i == 0), kind="detour")
-        step = float(np.max(np.abs(np.diff(np.vstack([start[None], detour]), axis=0))))
-        self.log(f"Detour planned and queued ({len(detour)} frames, largest joint step {step:.1f}deg).")
+        step = float(np.max(np.abs(np.diff(np.vstack([start[None], frames, goal_deg[None]]), axis=0))))
+        self.log(
+            f"Detour planned and queued ({len(frames)} frames by {DETOUR_PLANNER}, {result.min_distance_m * 1000:.0f}mm "
+            f"from the obstacles at its closest, largest joint step {step:.1f}deg)."
+        )
         return True
+
+    def _detour_frames(self, start: np.ndarray, goal: np.ndarray) -> np.ndarray:
+        """The frames of a detour between two configurations, from the planner DETOUR_PLANNER names.
+
+        start, goal: (6,) joints, degrees.
+        Returns: (K, 6) frames in degrees after the start; the caller adds the exact goal after them.
+        """
+        if DETOUR_PLANNER == "transit":
+            route = self.planner.plan_transit(start, goal, call="detour")
+            return route[1:-1]  # its ends are pinned to start and goal; the exact ones are driven instead
+        # The straight joint line, split into one planner batch, solved in REC mode toward its own TCP poses.
+        line = start[None] + np.arange(1, BATCH_SIZE + 1)[:, None] / BATCH_SIZE * (goal - start)[None]
+        detour, _ = self.planner.batch_solve(start, self.planner.tcp_poses(line), line, call="detour")
+        return detour
 
     # ----- commands ----------------------------------------------------------------------------
 

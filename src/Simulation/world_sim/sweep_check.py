@@ -56,9 +56,7 @@ class CompileLog(logging.Handler):
         import jax  # noqa: PLC0415
 
         jax.config.update("jax_log_compiles", True)
-        jax_logger = logging.getLogger("jax")
-        jax_logger.addHandler(self)
-        jax_logger.propagate = False  # keeps the compile lines out of the console
+        logging.getLogger("jax").addHandler(self)  # propagation stays on: planner_capture listens at the root
         self.planner = planner
         self.scenario: int | None = None  # scenario whose commands run now; None = not recording
         self.events: list[dict] = []  # {"tag": (scenario, command), "function", "seconds"}
@@ -235,7 +233,10 @@ def run_sweep(folder: str) -> None:
     t0 = time.time()
     planner = SimPlanner()
     log = CompileLog(planner)
-    summary = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "build": planner.timings[:2], "rows": [], "finished": False}
+    from Simulation.world_sim.commands import DETOUR_PLANNER  # noqa: PLC0415
+
+    summary = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "build": [t for t in planner.timings if t["call"].startswith("build_")], "rows": [],
+               "detour_planner": DETOUR_PLANNER, "finished": False}  # fmt: skip
     for index, name in enumerate(names):
         with open(os.path.join(folder, "scenarios", name)) as f:
             data = json.load(f)

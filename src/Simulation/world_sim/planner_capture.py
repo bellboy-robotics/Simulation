@@ -10,8 +10,9 @@ Collects, timestamped and tagged with the thread and scenario command:
   thread's "slot") or per thread, so a cache hit shows as misses == 0.
 
 The planner is built once and reused across scenarios (and editor runs), so the lines and events of
-one run are collected in a CaptureWindow open only during that run. Without loguru or with an older
-JAX lacking some monitoring hooks, the matching part is simply not captured.
+one run are collected in a CaptureWindow open only during that run, from the thread that opened it and
+the planner's background threads (not other threads of the process, e.g. editor requests). Without
+loguru or with an older JAX lacking some monitoring hooks, the matching part is simply not captured.
 """
 
 import logging
@@ -38,6 +39,9 @@ ZERO_STATS = {"trace_s": 0.0, "lower_s": 0.0, "backend_s": 0.0, "cache_read_s": 
 MAX_LINES = 500
 # Lines worth highlighting in the report: compiles, the JAX cache, waits and the gripper mesh fallback.
 NOTABLE = re.compile(r"compil|cache|warm-up|not ready|waiting|fall(ing)? ?back|not found", re.IGNORECASE)
+# Name prefixes of the planner's own background threads (resolver build/warm-ups, transit warm-up): their
+# lines and events go in every window; other threads only in the windows they opened.
+PLANNER_THREADS = ("pyroki-", "poc-")
 
 
 class CaptureWindow:
@@ -46,10 +50,11 @@ class CaptureWindow:
     def __init__(self, t0: float):
         """t0: Window start, epoch seconds; entry times are relative to it."""
         self.t0 = t0
+        self.thread = threading.current_thread().name  # the thread that plans in it (see wants)
         self.log: list[dict] = []  # {"t" (epoch s), "thread", "src", "level", "message", "command"}
         self.messages: list[dict] = []  # cloud messages: {"t", "thread", "level", "message", "command"}
         self.dropped = 0  # log lines past MAX_LINES, not kept
-        self.stats = dict(ZERO_STATS)  # compile stats of every event in the window, all threads
+        self.stats = dict(ZERO_STATS)  # compile stats of the window's events (its thread and planner threads)
 
     def result(self) -> dict:
         """The window's content for a results file.
@@ -59,6 +64,14 @@ class CaptureWindow:
         """
         rel = [[dict(e, t=round(e["t"] - self.t0, 4)) for e in entries] for entries in (self.log, self.messages)]
         return {"log": rel[0], "messages": rel[1], "log_dropped": self.dropped, "compile": with_compile_s(self.stats)}
+
+    def wants(self, thread: str) -> bool:
+        """Whether a line or event belongs here: from the window's own thread or a planner background thread,
+        not e.g. an editor request thread logging while a run plans.
+
+        thread: Name of the thread it came from. Returns: True to collect it.
+        """
+        return thread == self.thread or thread.startswith(PLANNER_THREADS)
 
 
 def with_compile_s(stats: dict) -> dict:
@@ -73,13 +86,12 @@ def with_compile_s(stats: dict) -> dict:
 
 
 class _RootHandler(logging.Handler):
-    """Hands every root-logger record to the capture."""
+    """Hands every root-logger record to the capture; prints warnings while logging is not configured."""
 
-    def __init__(self, capture: "PlannerCapture", passthrough: bool):
-        """capture: Receives the records. passthrough: Also print warnings like Python's default
-        handler (while this is the root logger's only handler, e.g. at import before basicConfig)."""
+    def __init__(self, capture: "PlannerCapture"):
+        """capture: Receives the records."""
         super().__init__(level=logging.INFO)
-        self._capture, self._passthrough = capture, passthrough
+        self._capture = capture
 
     def emit(self, record: logging.LogRecord) -> None:
         """Captures one record. record: The log record."""
@@ -88,7 +100,11 @@ class _RootHandler(logging.Handler):
                                    record.getMessage())  # fmt: skip
         except Exception:  # a capture bug must never break the planner's logging
             pass
-        if self._passthrough and record.levelno >= logging.lastResort.level:
+        # With only capture handlers on the root logger (no basicConfig, e.g. sweep.py), Python's own fallback
+        # (lastResort) never runs: print warnings and errors like it would, once (from the first handler).
+        handlers = logging.getLogger().handlers
+        unconfigured = all(isinstance(h, _RootHandler) for h in handlers) and handlers[:1] == [self]
+        if unconfigured and logging.lastResort is not None and record.levelno >= logging.lastResort.level:
             logging.lastResort.handle(record)
 
 
@@ -102,6 +118,7 @@ class PlannerCapture:
         self._slots: dict[int, dict] = {}  # thread ident -> compile stats of the call/phase that thread runs
         self.thread_stats: dict[str, dict] = {}  # thread name -> compile stats of its events outside slots
         self.thread_span: dict[str, list[float]] = {}  # thread name -> [first, last] epoch s of its lines/events
+        self.tracking = False  # fill thread_stats / thread_span (only while the planner builds; they are unbounded)
         self.command: Callable[[], int] = lambda: -1  # the scenario command running now, for the entries
         self._handler: _RootHandler | None = None
         self._jax_hooked = False
@@ -113,7 +130,7 @@ class PlannerCapture:
         """
         self.command = command
         if self._handler is None:
-            self._handler = _RootHandler(self, passthrough=False)
+            self._handler = _RootHandler(self)
             logging.getLogger().addHandler(self._handler)
             try:
                 from loguru import logger  # noqa: PLC0415 (pyroki and jaxls log through loguru)
@@ -138,7 +155,7 @@ class PlannerCapture:
         The handler is removed again afterwards, so a later logging.basicConfig still configures logging.
         Yields: The window collecting the lines.
         """
-        handler = _RootHandler(self, passthrough=not logging.getLogger().handlers)
+        handler = _RootHandler(self)
         logging.getLogger().addHandler(handler)
         window = self.open_window(time.time())
         try:
@@ -182,29 +199,31 @@ class PlannerCapture:
                         outer[k] += v
 
     def add_line(self, t: float, thread: str, src: str, level: str, message: str) -> None:
-        """Adds a log line to every open window.
+        """Adds a log line to the open windows that want its thread (see CaptureWindow.wants).
 
         t: Epoch seconds. thread: Thread name. src: "logging:<logger>" or "loguru:<module>".
         level: Level name. message: The text.
         """
         entry = {"t": t, "thread": thread, "src": src, "level": level, "message": message, "command": self.command()}
         with self._lock:
-            self._touch(thread, t)
-            for window in self._windows:
+            if self.tracking:
+                self._touch(thread, t)
+            for window in (w for w in self._windows if w.wants(thread)):
                 if len(window.log) < MAX_LINES:
                     window.log.append(entry)
                 else:
                     window.dropped += 1
 
     def add_message(self, level: str, message: str) -> None:
-        """Adds a cloud message the resolver sent (to the operator's app on the robot) to every open window.
+        """Adds a cloud message the resolver sent (to the operator's app on the robot) to the open windows
+        that want the calling thread.
 
         level: Its level ("INFO", ...). message: Its text.
         """
         entry = {"t": time.time(), "thread": threading.current_thread().name, "level": level, "message": message,
                  "command": self.command()}  # fmt: skip
         with self._lock:
-            for window in self._windows:
+            for window in (w for w in self._windows if w.wants(entry["thread"])):
                 window.messages.append(entry)
 
     def _touch(self, thread: str, t: float) -> None:
@@ -213,18 +232,20 @@ class PlannerCapture:
         span[0], span[1] = min(span[0], t), max(span[1], t)
 
     def _add(self, key: str, value: float) -> None:
-        """Adds one JAX event to the open windows and to the thread's slot (or its per-thread stats).
+        """Adds one JAX event to the open windows that want the thread and to its slot (or, while tracking,
+        to its per-thread stats).
 
         key: Compile stats key (see ZERO_STATS). value: Seconds, or 1 for a count.
         """
         thread = threading.current_thread()
         with self._lock:
-            targets = [w.stats for w in self._windows]
+            targets = [w.stats for w in self._windows if w.wants(thread.name)]
             slot = self._slots.get(thread.ident)
-            if slot is None:
+            if slot is None and self.tracking:
                 slot = self.thread_stats.setdefault(thread.name, dict(ZERO_STATS))
                 self._touch(thread.name, time.time())
-            targets.append(slot)
+            if slot is not None:
+                targets.append(slot)
             for stats in targets:
                 stats[key] += value
 

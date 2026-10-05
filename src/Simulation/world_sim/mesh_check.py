@@ -11,7 +11,9 @@ when the planner fell back to its gripper box). This module measures the real me
   arm calibration is used even when its gripper link frame is the planner's box fallback.
 """
 
+import logging
 import os
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,7 +38,10 @@ EXACT_WITHIN_M = 0.1
 # Point x capsule pairs per distance chunk (~32MB of float64 per temporary array).
 _CHUNK_PAIRS = 4_000_000
 
-_MEMORY: dict[tuple[str, float], "MeshPoints"] = {}  # (urdf path, mtime) -> points, for the live preview
+# What the cached points depend on besides the files: a cache written with other settings is rebuilt.
+_SETTINGS = f"v{_CACHE_VERSION} spacing={POINT_SPACING_M} samples={_MIN_SAMPLES}-{_MAX_SAMPLES} seed={_SEED}"
+
+_MEMORY: dict[tuple[str, float], "MeshPoints"] = {}  # (urdf path, source mtime) -> points, for the live preview
 
 
 @dataclass
@@ -124,6 +129,9 @@ def build_mesh_points(path: str) -> MeshPoints:
             continue
         local, vertex = _link_points(link, rng)
         if not len(local):
+            if link.collisions:  # e.g. a box: its real-mesh distance stays +inf (unknown), not clear
+                logging.warning(f"mesh_check: {link.name} has no collision mesh in {path}; its real geometry is "
+                                "not checked")  # fmt: skip
             continue
         parent, T = ancestors[link.name]
         index.append(np.full(len(local), len(names)))
@@ -137,44 +145,58 @@ def build_mesh_points(path: str) -> MeshPoints:
                       np.concatenate(is_vertex))  # fmt: skip
 
 
+def _source_mtime(path: str) -> float:
+    """Latest modification time of a URDF and the mesh files it references (a replaced mesh, even with the
+    URDF unchanged, invalidates the cached points).
+
+    path: The URDF. Returns: Epoch seconds; mesh files that do not exist are skipped.
+    """
+    with open(path) as f:
+        meshes = re.findall(r'filename="([^"]+)"', f.read())
+    return max([os.path.getmtime(path)] + [os.path.getmtime(m) for m in meshes if os.path.exists(m)])
+
+
 def mesh_points(path: str | None = None) -> MeshPoints:
     """The URDF's mesh points: from memory, else from the disk cache, else sampled (and cached).
 
     path: The merged URDF; None for this machine's (urdf_path()).
-    Returns: The points. The caches are keyed by the URDF's modification time.
+    Returns: The points. The caches are keyed by the URDF's and its meshes' latest modification time and
+        by the sampling settings (_SETTINGS).
     """
     path = path or urdf_path()
-    key = (path, os.path.getmtime(path))
+    key = (path, _source_mtime(path))
     if key in _MEMORY:
         return _MEMORY[key]
     cache = os.path.join(_CACHE_DIR, f"mesh_points_{os.path.splitext(os.path.basename(path))[0]}.npz")
     points = None
     if os.path.exists(cache):
         with np.load(cache) as data:
-            if float(data["mtime"]) == key[1] and int(data["version"]) == _CACHE_VERSION:
+            if float(data["mtime"]) == key[1] and "settings" in data and str(data["settings"]) == _SETTINGS:
                 points = MeshPoints(data["link_names"].tolist(), data["ancestors"].tolist(), data["link_in_ancestor"],
                                     data["points"], data["link_index"], data["is_vertex"])  # fmt: skip
     if points is None:
         points = build_mesh_points(path)
         os.makedirs(_CACHE_DIR, exist_ok=True)
-        np.savez(cache, mtime=key[1], version=_CACHE_VERSION, link_names=np.array(points.link_names),
+        np.savez(cache, mtime=key[1], settings=_SETTINGS, link_names=np.array(points.link_names),
                  ancestors=np.array(points.ancestors), link_in_ancestor=points.link_in_ancestor,
                  points=points.points, link_index=points.link_index, is_vertex=points.is_vertex)  # fmt: skip
     _MEMORY[key] = points
     return points
 
 
-def capsule_point_distances(points: np.ndarray, starts: np.ndarray, ends: np.ndarray, radii: np.ndarray) -> np.ndarray:
+def capsule_point_distances(points: np.ndarray, starts: np.ndarray, ends: np.ndarray, radii: np.ndarray,
+                            with_index: bool = False):  # fmt: skip
     """Signed distance from each point to the nearest capsule (point-to-segment minus radius), chunked.
 
     points: (N, 3) meters.
     starts, ends: (M, 3) capsule segment ends, meters (M >= 1). radii: (M,) meters.
-    Returns: (N,) meters; negative inside a capsule.
+    with_index: Also return which capsule is the nearest.
+    Returns: (N,) meters, negative inside a capsule; with with_index, (that, (N,) nearest capsule index).
     """
     axis = ends - starts
     length2 = np.maximum(np.sum(axis * axis, axis=1), 1e-18)
     start_axis, start2 = np.sum(starts * axis, axis=1), np.sum(starts * starts, axis=1)
-    out = np.empty(len(points))
+    out, nearest = np.empty(len(points)), np.empty(len(points), dtype=np.int64)
     step = max(1, _CHUNK_PAIRS // len(radii))
     # The matrix products expand |p - a - t d|^2 so BLAS does the heavy part; macOS Accelerate can raise
     # spurious floating point warnings inside matmul, hence errstate.
@@ -185,8 +207,10 @@ def capsule_point_distances(points: np.ndarray, starts: np.ndarray, ends: np.nda
             rel2 = np.sum(p * p, axis=1)[:, None] - 2.0 * (p @ starts.T) + start2  # |p - a|^2
             t = np.clip(along / length2, 0.0, 1.0)
             dist2 = rel2 - t * (2.0 * along - t * length2)
-            out[begin : begin + step] = (np.sqrt(np.maximum(dist2, 0.0)) - radii).min(axis=1)
-    return out
+            signed = np.sqrt(np.maximum(dist2, 0.0)) - radii
+            nearest[begin : begin + step] = signed.argmin(axis=1)
+            out[begin : begin + step] = signed[np.arange(len(p)), nearest[begin : begin + step]]
+    return (out, nearest) if with_index else out
 
 
 def link_mesh_distances(
@@ -196,6 +220,7 @@ def link_mesh_distances(
     ends: np.ndarray,
     radii: np.ndarray,
     points: MeshPoints | None = None,
+    nearest: np.ndarray | None = None,
 ) -> np.ndarray:
     """Signed distance from every link's real collision mesh to the nearest capsule, per configuration.
 
@@ -203,6 +228,8 @@ def link_mesh_distances(
     joints_deg: (S, 6) configurations, degrees.
     starts, ends: (M, 3) obstacle capsule segment ends, xArm base frame, meters. radii: (M,) meters.
     points: The mesh points; None for this machine's URDF (mesh_points()).
+    nearest: Optional (S, L) int array, filled in with the index of the capsule each distance is to (for a
+        lower bound, the capsule nearest the link's bounding sphere); left as is for links without points.
     Returns: (S, L) meters over model.link_names, negative inside; +inf for links without mesh points
         (static links, link_tcp) or with no capsules. Values >= EXACT_WITHIN_M are lower bounds.
     """
@@ -220,15 +247,21 @@ def link_mesh_distances(
             frame = T[:, model.link_names.index(ancestor)]  # (S, 4, 4)
             center = (local.min(axis=0) + local.max(axis=0)) / 2.0
             reach = np.linalg.norm(local - center, axis=1).max()  # bounding sphere radius
-            bound = capsule_point_distances(frame[:, :3, :3] @ center + frame[:, :3, 3], starts, ends, radii) - reach
+            bound, which = capsule_point_distances(frame[:, :3, :3] @ center + frame[:, :3, 3], starts, ends, radii,
+                                                   with_index=True)  # fmt: skip
+            bound -= reach
             near = np.flatnonzero(bound < EXACT_WITHIN_M)
             step = max(1, _CHUNK_PAIRS // (len(local) * len(radii)))
             for begin in range(0, len(near), step):
-                chunk = frame[near[begin : begin + step]]
-                world = np.einsum("sij,pj->spi", chunk[:, :3, :3], local) + chunk[:, None, :3, 3]
-                exact = capsule_point_distances(world.reshape(-1, 3), starts, ends, radii).reshape(len(chunk), -1)
-                bound[near[begin : begin + step]] = exact.min(axis=1)
+                rows = near[begin : begin + step]
+                world = np.einsum("sij,pj->spi", frame[rows, :3, :3], local) + frame[rows, None, :3, 3]
+                exact, index = capsule_point_distances(world.reshape(-1, 3), starts, ends, radii, with_index=True)
+                exact, index = exact.reshape(len(rows), -1), index.reshape(len(rows), -1)
+                deepest = exact.argmin(axis=1)
+                bound[rows], which[rows] = exact[np.arange(len(rows)), deepest], index[np.arange(len(rows)), deepest]
             dist[:, model.link_names.index(name)] = bound
+            if nearest is not None:
+                nearest[:, model.link_names.index(name)] = which
     return dist
 
 

@@ -32,14 +32,21 @@ A browser page to build scenarios and run them:
   count against the 32 slots. For a table or wall, "spacing" sets the distance between neighbouring
   capsules (empty = the robot's default). Fewer capsules save slots; the form shows the holes that
   leaves. "🎲 Random object" adds a table, wall, post or ball within the arm's reach, never touching
-  Billie at the start joints.
-- **Arm**: Billie is drawn from the planner's merged URDF (`/tmp/urdf/<XARM_SN>-with-tcp.urdf`: base,
-  xArm, gripper and TCP) with its meshes, and its joints are set by the URDF itself. A link turns
-  orange within the planner's 2cm margin of an avoid object and magenta inside one. "Planner
-  capsules" (C) overlays the link capsules the planner checks. The sliders edit whatever is
-  selected: the start joints, a `joints` command, or a free preview.
-- **Commands**: add `joints` (the slider joints), `pose` (the current TCP; drag its target in the
-  view) or `replay_policy`. "Solve IK" shows the planner's solution for a pose. "🎲 Random" adds N
+  Billie at the start joints. "+ Door" and "+ Handle" add objects that turn about a hinge when the arm
+  pushes them (see [Doors and handles](#doors-and-handles)). A new handle is mounted on the last door,
+  on the arm's side. Faint copies show each one at its min and max angles. Moving a door moves its
+  handle too.
+- **Arm init position**: Billie is drawn from the planner's merged URDF (`/tmp/urdf/<XARM_SN>-with-tcp.urdf`:
+  base, xArm, gripper and TCP) with its meshes, and its joints are set by the URDF itself.
+  - A link turns orange within the planner's 2cm margin of an avoid object and magenta inside one.
+    The color takes the worse of the planner's capsule and the real mesh (see
+    [Real geometry check](#real-geometry-check)), and the text shows both when they disagree.
+  - "Planner capsules" (C) overlays the capsules the planner checks. In playback these are the run's
+    own capsules, for example the robot's.
+  - The sliders edit whatever is selected: the init position ("Edit init position"), a `joints`
+    command, or a free preview. "Jump to init position" shows the arm there without changing anything.
+- **Commands**: add `joints` ("+ joints (sliders)"), `pose` ("+ pose (TCP)": the sliders' TCP; drag its
+  target in the view) or `replay_policy`. "Solve IK" shows the planner's solution for a pose. "🎲 Random" adds N
   `joints` or `pose` commands to valid configurations: inside the joint limits, clear of the avoid
   objects, the floor and Billie's own body. A pose is the TCP of such a configuration, so it is reachable.
   The toast shows the seed; type it in the seed field to draw the same again.
@@ -56,11 +63,15 @@ A browser page to build scenarios and run them:
   stops early, so compare its row with care.
   **Reset** puts the arm back at the start joints and clears the last run's results from the page.
   History keeps them. Run also clears the old results before it starts.
+  On the play bar, a numbered marker sits where each command's last target is reached. Failed
+  commands are red, a command that failed before sending any target shows "N✗", and clicking a marker
+  jumps there. The playback label also shows door and handle angles, and blocked pushes.
 - **History**: every Run is kept in `output/world_sim/runs/<time>_<file>/` with the scenario as it
   ran, then per machine its results (`local.json`, `billie-29.json`, ...) and report. A run also keeps
   the note typed before Run. Click a run to see its machines and timing, play one (this loads that
-  run's scenario), reopen its scenario or delete it. `runs/index.html` ("all runs") lists every
-  run and opens straight from disk too.
+  run's scenario), reopen its scenario or delete it. **Clean** deletes every finished run (it asks
+  first). Runs that are still going on are kept; a run whose editor died shows as "failed
+  (interrupted)". `runs/index.html` ("all runs") lists every run and opens straight from disk too.
 - **Save** writes the scenario to `scenarios/`, ready for `plan` and `robot.py`.
 
 The planner builds in the background. Editing works before it is ready, using the arm model cached in
@@ -104,6 +115,21 @@ The planner builds in the background. Editing works before it is ready, using th
   `spacing - thickness`.
 - `eef_touch` objects are only drawn (green) and measured: EEF vs rest-of-arm distance in the
   report. The planner does not know them yet; see WORLD_COLLISION_DISCUSSION.md §3.
+- `push` objects are doors and handles (the role is always `push`). They are not sent to the
+  planner; the simulation turns them out of the arm's way:
+  ```json
+  {"name": "door 1",   "role": "push", "type": "door",   "hinge_xy_mm": [x,y], "yaw_deg": 0, "width_mm": 800, "height_mm": 2000,
+   "bottom_mm": 10, "thickness_mm": 40, "direction": "ccw", "min_deg": 0, "max_deg": 90},
+  {"name": "handle 1", "role": "push", "type": "handle", "start_mm": [x,y,z], "end_mm": [x,y,z], "radius_mm": 12,
+   "axis": [ax,ay,az], "direction": "cw", "min_deg": 0, "max_deg": 45, "mounted_on": "door 1"}
+  ```
+  - A door's hinge is vertical, at `hinge_xy_mm`. `yaw_deg` points from the hinge to the free edge
+    at 0°.
+  - A handle's hinge passes through `start_mm` along `axis`. `end_mm` is its free end at 0°.
+  - `direction` is the positive turn: `ccw` or `cw`, looking down the hinge axis from its tip (for a
+    door: seen from above).
+  - `min_deg` ≤ 0 ≤ `max_deg` are limits from the initial pose.
+  - `mounted_on` makes a handle turn with its door. `scenarios/door_push.json` is an example.
 
 ## What is simulated
 
@@ -112,6 +138,36 @@ The planner builds in the background. Editing works before it is ready, using th
 | pyroki planner node (`plan`, `batch_plan`, `poc_plan_transit`, obstacles) | `planner.py`, the same `IKResolver` and transit planner in-process |
 | brain `set_state_with_arm_joints` + detour, `pose`, `joints`, `replay_policy`, BufferingPlayer, reroute | `commands.py`, `reroute.py` (ports, keep in sync) |
 | xarm_writer queue + arm-move guard | `sim_arm.py`, the real `arm_motion_guard_poc` |
+
+## Real geometry check
+
+The planner checks one capsule per link, and the capsules don't cover every link. Even fitted to
+the real mesh, the gripper/camera sticks out of its capsule by up to 22mm; the link6 flange
+by 35mm.
+
+`mesh_check.py` samples every link's URDF collision mesh, posed with the run's own link frames
+(so a robot run uses its calibration). It measures the real distance to the avoid objects:
+- The report adds a "real mesh" column and a red box listing every move where the real mesh enters
+  an object while the planner model reads clear, with the link and depth.
+- A box warns when the planner used the gripper's bounding-box fallback (its gripper mesh was
+  missing), because that box misses the camera bracket.
+- A pose the planner solved away from its target is marked "not reached (X mm, Y°)" instead of
+  "ok". The planner never refuses: its world cost is soft, so it returns its best compromise.
+
+## Doors and handles
+
+`pushables.py` turns every door and handle along the planned path, at 0.5° joint steps, so a link
+can't jump through a door between samples. The model is kinematic:
+- When an arm link would enter the object, the object turns just enough to stay clear. It only
+  turns the way that takes it out of the arm.
+- It stays where it was left: no spring, no inertia, no friction.
+- At a limit with the arm still inside, it is **blocked**. That is a collision: the report and the
+  editor show the depth and the pushing link.
+- Pushing with a link other than the end effector is flagged.
+
+The report's "Doors and handles" section lists every push: object, command, targets, angles, free
+or blocked, and the links that pushed. Its view plots each angle along the path, with the limits
+dashed. The PyBullet viewer draws doors and handles at 0°.
 
 The arm reaches each target instantly (no controller dynamics, no timing). Gripper, `thing`, brain
 commands inside recordings, and the `map` / `pointcloud` / `gripper` replay transforms are not simulated.
@@ -130,18 +186,36 @@ python -m Simulation.world_sim.view output/world_sim/billie-29/post_across_path.
      uses the local billie-onboard instead. It prints both commits.
    - this package, the scenarios and their recordings (exported to JSON, since the robot venv has no
      lerobot).
-   - the arm's URDF from a local `~/releases/env/*/urdf`. It is used only on a robot with no URDF of its own (no physical arm, e.g. billie-29). Every xArm6 URDF has the same links and joints, so timings are unaffected; clearances differ by about a millimeter.
+   - the arm's URDF from a local `~/releases/env/*/urdf`. It is used only on a robot with no URDF of
+     its own (no physical arm, e.g. billie-29). Every xArm6 URDF has the same links and joints, so
+     timings are unaffected; clearances differ by about a millimeter.
+   - The gripper mesh `ee-rome-v0-lod.stl` is sent as a real file, taken from the local env the
+     editor uses. The `BILLIE-*` envs only have a broken symlink to it. Without the mesh, the planner
+     falls back to a bounding box that misses the camera bracket. The sync fails if the file doesn't
+     arrive, and `robot_run_plan.sh` refuses to plan without it.
 2. **run** starts `robot_run_plan.sh` inside the container. It uses the live `pyroki-planner`
    process's environment (arm, flags, GPU), the planner venv, the synced code ahead of `/app`, and its
    own JAX cache. The robot's `/app`, planner process and cache are not touched.
 3. **fetch** copies the results to `output/world_sim/<robot>/` and writes their reports.
 
-The report's "Planner timing" table shows, for each command:
-- single IK, detour, transit and replay batch times;
-- a robot time estimate. It feeds the replay batch times into the 50Hz BufferingPlayer, so a stall
-  shows as wall time above the playback time.
+The report's "Planner timing" section shows:
+- **Planner build**, one row per phase (IK setup, single and batch IK warm-ups, model export, transit
+  planner build and warm-up). Each row has its seconds, Python tracing, XLA compile or cache load, and
+  JAX cache hits and misses. Its verdict ("loaded from cache" / "compiled") comes from JAX's own
+  cache events, next to the resolver's own guess.
+- Banners when the build was paid before this run (an earlier run or the editor's start), and which
+  gripper geometry the planner used (mesh or box fallback).
+- Per command: single IK, detour, transit and replay batch times, split into compile and compute,
+  with and without obstacles. Also a robot time estimate: it feeds the replay batch times into the
+  50Hz BufferingPlayer, so a stall shows as wall time above the playback time.
+- Planner calls by type: count, poses, mean / median / p95 / max, the first-call penalty, and ms per
+  pose for batches.
+- A "Planner timeline" view: a Gantt of the build phases and every planner call.
+- The planner log: the build's and the run's log lines and planner messages ("[compile] …", cache,
+  fallback warnings), captured by `planner_capture.py`.
 
-The first run on a robot includes the JAX compile. Later runs load it from the cache.
+The first run on a robot, or after the robot geometry changes, includes the JAX compile: on billie-29
+about 70s single IK, 165s batch IK and 80s transit. Later runs load it from the cache.
 
 ## Finding problems: random sweeps
 

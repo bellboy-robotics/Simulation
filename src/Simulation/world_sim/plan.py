@@ -44,7 +44,7 @@ def run_scenario(
     stop_on_error: Stop at the first failed command, like a brain script; else run the rest anyway.
     Returns: Results dict (see save_results) with the arm's trajectory, operator messages and command outcomes
         (with start_s / end_s), the planner calls (timings: call, command, n, seconds, start_s, compile_s,
-        cache_hits, cache_misses), the planner build (planner_build, see _build_info), and the planner's log
+        cache_hits, cache_misses), the planner build (planner_build), and the planner's log
         lines, cloud messages and JAX compile totals during this run (planner_log, planner_messages, planner_compile).
     """
     reused = planner.runs_started > 0  # an earlier run already reported (and waited for) the build
@@ -81,7 +81,10 @@ def run_scenario(
         # Planner build (compile or cache load) and every solve of this scenario, for the timing report.
         "timings": _run_timings([t for t in planner.timings if t["call"].startswith("build_")]
                                 + planner.timings[first_timing:], window.t0),  # fmt: skip
-        "planner_build": _build_info(planner, reused, window.t0),
+        # planner.build (see SimPlanner._finish_build), whether an earlier run used it, and the seconds from
+        # the build start to this run's start.
+        "planner_build": {**planner.build, "reused": reused,
+                          "before_run_s": round(window.t0 - planner.build["built_at"], 3)},  # fmt: skip
         "planner_log": captured["log"],  # the planner's log lines during this run
         "planner_log_dropped": captured["log_dropped"],
         "planner_messages": captured["messages"],  # its cloud messages to the operator during this run
@@ -104,17 +107,6 @@ def _run_timings(timings: list[dict], started_at: float) -> list[dict]:
             row["start_s"] = round(t["start"] - started_at, 4)
         out.append(row)
     return out
-
-
-def _build_info(planner: SimPlanner, reused: bool, started_at: float) -> dict:
-    """The planner build for a run's results: planner.build plus how it relates to this run.
-
-    planner: The planner. reused: True when an earlier run already used this build.
-    started_at: The run start, epoch s.
-    Returns: planner.build (see SimPlanner._finish_build) with "reused" and "before_run_s" (seconds from the
-        build start to the run start).
-    """
-    return {**planner.build, "reused": reused, "before_run_s": round(started_at - planner.build["built_at"], 3)}
 
 
 def run_without_obstacles(

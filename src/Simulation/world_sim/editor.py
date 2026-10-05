@@ -35,10 +35,11 @@ from billie_utils.world_collision_check_poc import CollisionModel, link_obstacle
 from scipy.spatial.transform import Rotation
 
 from Simulation.world_sim import robot, runs
-from Simulation.world_sim.analysis import Run, dense_path, link_distances, load_run
-from Simulation.world_sim.mesh_check import link_mesh_distances, urdf_path
+from Simulation.world_sim.analysis import EEF_LINKS, Run, dense_path, link_distances, load_run, planner_gripper_box
+from Simulation.world_sim.mesh_check import EXACT_WITHIN_M, link_mesh_distances, urdf_path
 from Simulation.world_sim.randomize import random_motions, random_objects
-from Simulation.world_sim.world import object_capsules, scenario_from_data
+from Simulation.world_sim.pushables import push_events, simulate_pushes
+from Simulation.world_sim.world import PUSHABLE_TYPES, hinge_of, object_capsules, scenario_from_data
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 EDITOR_HTML = os.path.join(_HERE, "editor.html")
@@ -228,8 +229,9 @@ def world_view(state: EditorState, data: dict) -> dict:
 
     state: The editor state. data: The scenario as edited on the page.
     Returns: {"objects": per object {"capsules": [[sx, sy, sz, ex, ey, ez, r] meters], "error": str or None,
-        "spacing_mm": distance between neighbouring capsule centers (null for one capsule)},
-        "avoid_capsules": capsules the avoid objects need, "max_capsules": planner slots}.
+        "spacing_mm": distance between neighbouring capsule centers (null for one capsule), and for doors
+        and handles "hinge": {"point_m", "axis" (unit, positive = its direction), "min_deg", "max_deg"} in
+        the same frame}, "avoid_capsules": capsules the avoid objects need, "max_capsules": planner slots}.
     """
     floor_z_m = data.get("floor_z_mm", -DEFAULT_ARM_BASE_HEIGHT_M * 1000.0) / 1000.0
     objects, n_avoid = [], 0
@@ -238,14 +240,18 @@ def world_view(state: EditorState, data: dict) -> dict:
             # A map object's z is its height above the floor: the map frame is a frame with the floor at 0.
             floor = 0.0 if spec.get("frame") == "map" else floor_z_m
             starts, ends, radii = object_capsules(spec, floor)
+            hinge = None
+            if spec["type"] in PUSHABLE_TYPES:
+                point, axis, min_deg, max_deg = hinge_of(spec, floor)
+                hinge = {"point_m": point.round(_DECIMALS), "axis": axis.round(6), "min_deg": min_deg, "max_deg": max_deg}
             rows, error = np.column_stack([starts, ends, radii]).round(_DECIMALS).tolist(), None
             centers = (starts + ends) / 2.0
             spacing = round(float(np.linalg.norm(centers[1] - centers[0])) * 1000.0, 1) if len(radii) > 1 else None
         except (KeyError, ValueError, TypeError, AssertionError) as e:
-            rows, error, spacing = [], f"{type(e).__name__}: {e}", None
-        if spec.get("role", "avoid") == "avoid":
+            rows, error, spacing, hinge = [], f"{type(e).__name__}: {e}", None, None
+        if spec.get("role", "avoid") == "avoid" and spec["type"] not in PUSHABLE_TYPES:
             n_avoid += len(rows)
-        objects.append({"capsules": rows, "error": error, "spacing_mm": spacing})
+        objects.append({"capsules": rows, "error": error, "spacing_mm": spacing, "hinge": hinge})
     return {"objects": objects, "avoid_capsules": n_avoid, "max_capsules": MAX_WORLD_CAPSULES}
 
 
@@ -259,15 +265,17 @@ def mesh_clearance(model: CollisionModel, joints_deg: np.ndarray, objects: list[
         nearest one, -1 for none).
     """
     joints = np.atleast_2d(joints_deg)
-    per_object = [link_mesh_distances(model, joints, *o[1:]) * 1000.0 for o in objects if len(o[3])]
-    if not per_object:
-        shape = (len(joints), len(model.link_names))
+    shape = (len(joints), len(model.link_names))
+    if not any(len(o[3]) for o in objects):
         return np.full(shape, np.inf), np.full(shape, -1)
-    index = [i for i, o in enumerate(objects) if len(o[3])]
-    stacked = np.stack(per_object)  # (O, S, L)
-    nearest = np.asarray(index)[stacked.argmin(axis=0)]
-    distance = stacked.min(axis=0)
-    return distance, np.where(np.isfinite(distance), nearest, -1)
+    # One pass over every object's capsules; owner maps the nearest capsule back to its object.
+    starts = np.concatenate([np.reshape(o[1], (-1, 3)) for o in objects])
+    ends = np.concatenate([np.reshape(o[2], (-1, 3)) for o in objects])
+    radii = np.concatenate([np.reshape(o[3], -1) for o in objects])
+    owner = np.concatenate([np.full(len(o[3]), i) for i, o in enumerate(objects)])
+    nearest = np.zeros(shape, dtype=np.int64)
+    distance = link_mesh_distances(model, joints, starts, ends, radii, nearest=nearest) * 1000.0
+    return distance, np.where(np.isfinite(distance), owner[nearest], -1)
 
 
 def clearance_summary(model: CollisionModel, capsule_mm: np.ndarray, mesh_mm: np.ndarray, mesh_object: np.ndarray,
@@ -278,14 +286,18 @@ def clearance_summary(model: CollisionModel, capsule_mm: np.ndarray, mesh_mm: np
     mesh_object: (S, L) nearest object index per link for the mesh distances, -1 for none.
     names: Object names, indexed by mesh_object.
     Returns: (S,) {"capsule_mm", "capsule_link": closest by capsule; "mesh_mm", "mesh_link", "mesh_object":
-        closest by real mesh and its object; "mesh_link_capsule_mm": that link's capsule distance}; numbers
-        rounded to 0.1mm, null when there is no distance.
+        closest by real mesh and its object, "mesh_far": True when mesh_mm is only the lower bound
+        mesh_check.EXACT_WITHIN_M (every link farther; mesh_link is then not the closest one for sure);
+        "mesh_link_capsule_mm": that link's capsule distance}; numbers rounded to 0.1mm, null when there is no
+        distance.
     """
-    out = []
+    out, far_mm = [], EXACT_WITHIN_M * 1000.0
     for capsule, mesh, obj in zip(capsule_mm, mesh_mm, mesh_object):
         c, m = int(np.argmin(capsule)), int(np.argmin(mesh))
-        out.append({"capsule_mm": _mm(capsule[c]), "capsule_link": model.link_names[c], "mesh_mm": _mm(mesh[m]),
-                    "mesh_link": model.link_names[m], "mesh_object": names[obj[m]] if obj[m] >= 0 else None,
+        far = bool(np.isfinite(mesh[m]) and mesh[m] >= far_mm)
+        out.append({"capsule_mm": _mm(capsule[c]), "capsule_link": model.link_names[c],
+                    "mesh_mm": _mm(far_mm if far else mesh[m]), "mesh_far": far, "mesh_link": model.link_names[m],
+                    "mesh_object": names[obj[m]] if obj[m] >= 0 else None,
                     "mesh_link_capsule_mm": _mm(capsule[m])})  # fmt: skip
     return out
 
@@ -465,15 +477,27 @@ def playback(run: Run) -> dict:
         1 inside the planner margin / 2 inside an avoid object, the worse of the planner capsule and the
         real mesh (mesh_check), "summary": (S,) see clearance_summary, "tcp_mm": (S, 3), "owner": (S,)
         target index per sample (-1 = start), "targets": per target {"command", "kind", "blocked"},
-        "commands": per command {"cmd", "ok", "error", "seconds"}, "events": operator messages}.
+        "commands": per command {"cmd", "ok", "error", "seconds"}, "events": operator messages,
+        "warnings": run-level notes like the report's (planner gripper box, real-mesh contacts it reads clear,
+        blocked pushes), "pushes": see _playback_pushes}.
     """
     samples, owner = dense_path(run)
     distance = link_distances(run, samples, "avoid") * 1000.0
     avoid = [(o["name"], o["starts_m"], o["ends_m"], o["radii_m"]) for o in run.objects if o["role"] == "avoid"]
     mesh, mesh_object = mesh_clearance(run.model, samples, avoid)
+    warnings = []
+    if planner_gripper_box(run):
+        warnings.append(f"The planner on {run.machine.get('host', '?')} modelled the gripper as its bounding box (its "
+                        "gripper mesh was missing there): its gripper clearances miss the camera bracket.")  # fmt: skip
+    hidden = np.flatnonzero((mesh.min(axis=1) < 0) & (distance.min(axis=1) >= 0) & (owner >= 0))
+    if len(hidden):
+        commands = ", ".join(str(c + 1) for c in sorted({int(run.command[owner[k]]) for k in hidden}))
+        warnings.append(f"The real arm mesh enters an avoid object where the planner model reads clear: {len(hidden)} "
+                        f"samples of cmd {commands}, deepest {mesh[hidden].min():.0f} mm.")  # fmt: skip
     worst = np.minimum(distance, mesh)
     link_state = np.where(worst < 0, 2, np.where(worst < WORLD_COL_MARGIN_M * 1000.0, 1, 0))
     poses, tcp = arm_poses(run.model, samples)
+    pushes, push_warnings = _playback_pushes(run, owner)
     return {
         "joints_deg": samples.round(2),
         "poses": poses,
@@ -486,7 +510,35 @@ def playback(run: Run) -> dict:
         "commands": [{"cmd": c["spec"]["cmd"], "ok": c["ok"], "error": c["error"], "seconds": round(c["seconds"], 2)}
                      for c in run.commands],  # fmt: skip
         "events": run.events,
+        "warnings": warnings + push_warnings,
+        "pushes": pushes,
     }
+
+
+def _playback_pushes(run: Run, owner: np.ndarray) -> tuple[dict | None, list[str]]:
+    """How the run's doors and handles turned along the playback path (pushables.py).
+
+    run: The planned run. owner: (S,) target index per playback sample.
+    Returns: (None without doors or handles, else {"objects": index of each in the scenario's objects,
+        "angles_deg": (S, P), "blocked_mm": (S, P), "pusher": (S, P) link name or None, "events": see
+        pushables.push_events}; warnings about blocked pushes and pushes by links other than the EEF).
+    """
+    pushes = simulate_pushes(run.model, run.objects, run.start_deg, run.joints_deg)
+    if pushes is None:
+        return None, []
+    events = push_events(pushes, owner, run.command)
+    warnings = []
+    for e in events:
+        where = f"{e['object']} (cmd {e['command'] + 1}, targets {e['first_target']}-{e['last_target']})"
+        if e["blocked_mm"] > 0:
+            warnings.append(f"{where}: pushed past its limit, the arm goes {e['blocked_mm']:.0f} mm into it (a collision).")
+        others = [link for link in e["links"] if link not in EEF_LINKS]
+        if others:
+            warnings.append(f"{where}: pushed by {', '.join(others)}, not only by the end effector.")
+    names = [o["name"] for o in run.objects]
+    pushes["objects"] = [names.index(n) for n in pushes.pop("names")]
+    pushes["events"] = events
+    return pushes, warnings
 
 
 def _scenario_path(name: str) -> str:

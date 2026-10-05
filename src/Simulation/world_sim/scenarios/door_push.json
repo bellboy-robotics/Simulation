@@ -1,0 +1,13 @@
+{
+  "name": "Push a door open",
+  "start_joints_deg": [-15.4, 4.3, -61.6, 78.3, 100.1, 45.3],
+  "billie": {"pose": [0, 0, 0], "arm_to_base": [-130, 0, 0]},
+  "objects": [
+    {"name": "door 1", "role": "push", "frame": "map", "type": "door", "hinge_xy_mm": [-530, 420], "yaw_deg": 0, "width_mm": 900, "height_mm": 2000, "bottom_mm": 0, "thickness_mm": 40, "direction": "ccw", "min_deg": 0, "max_deg": 90},
+    {"name": "handle 1", "role": "push", "frame": "map", "type": "handle", "mounted_on": "door 1", "start_mm": [320, 395, 740], "end_mm": [200, 395, 740], "radius_mm": 12, "axis": [0, -1, 0], "direction": "cw", "min_deg": 0, "max_deg": 45}
+  ],
+  "commands": [
+    {"cmd": "joints", "joints": [29.6, 4.3, -61.6, 78.3, 100.1, 45.3]},
+    {"cmd": "joints", "joints": [-15.4, 4.3, -61.6, 78.3, 100.1, 45.3]}
+  ]
+}

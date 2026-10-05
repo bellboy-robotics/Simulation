@@ -36,6 +36,8 @@ _BILLIE_CODE = [
     ("billie/vendor/pyroki/src/pyroki", "pyroki/src/pyroki"),
 ]
 _RSYNC = ["rsync", "-a", "--delete", "--exclude", "__pycache__", "--exclude", "*.html"]
+# Gripper and camera collision mesh the planner loads from $BILLIE_ENVDIR/urdf/meshes (pyroki_planner/urdf.py).
+_GRIPPER_MESH = "ee-rome-v0-lod.stl"
 
 
 def _local_billie_path(path: str) -> str:
@@ -129,13 +131,18 @@ def _sync_arm_urdf(host: str, say: Callable[[str], None] = print) -> None:
         say(f"No local URDF for arm {sn or '?'}; the robot's own one must exist")
         return
     urdf_dir = os.path.dirname(found[0])
-    _sh(["ssh", host, "mkdir", "-p", f"{ROBOT_DIR}/env/urdf/meshes"])
+    meshes = f"{ROBOT_DIR}/env/urdf/meshes"
+    _sh(["ssh", host, "mkdir", "-p", meshes])
     _sh(["rsync", "-a", found[0], f"{host}:{ROBOT_DIR}/env/urdf/"])
-    # --copy-links: meshes linked into another env (ee-rome-v0-lod.stl -> ../../base/meshes/...) arrive as
-    # real files. Copied as links they dangle on the robot and the planner falls back to its gripper box.
-    _sh([*_RSYNC, "--copy-links", _dir_slash(os.path.join(urdf_dir, "meshes"), True),
-         f"{host}:{ROBOT_DIR}/env/urdf/meshes/"])  # fmt: skip
-    say(f"Arm URDF {sn}: synced a fallback copy from {urdf_dir}")
+    # Mesh symlinks stay links: the arm's point at /billie-env/base/... and resolve only inside the container.
+    # The gripper's (../../base/meshes/...) dangles everywhere, so it is excluded and copied as a real file.
+    _sh([*_RSYNC, "--exclude", _GRIPPER_MESH, _dir_slash(os.path.join(urdf_dir, "meshes"), True), f"{host}:{meshes}/"])
+    # The same STL the local URDF (and so the report's real-mesh check) uses; without it the planner
+    # silently falls back to its gripper box, which leaves out the camera bracket.
+    gripper = os.path.join(os.environ["BILLIE_ENVDIR"], "urdf", "meshes", _GRIPPER_MESH)
+    _sh(["rsync", "-a", "--copy-links", gripper, f"{host}:{meshes}/{_GRIPPER_MESH}"])
+    _sh(["ssh", host, "test", "-f", f"{meshes}/{_GRIPPER_MESH}"])  # fails the sync if it did not arrive
+    say(f"Arm URDF {sn}: synced a fallback copy from {urdf_dir} (gripper mesh from {gripper})")
 
 
 def run(host: str, scenarios: list[str], plan_args: list[str], log: Callable[[str], None] | None = None) -> None:
@@ -184,8 +191,12 @@ def main() -> None:
                         help='billie-onboard checkout on the robot to take the planner code from ("" = local code)')
     parser.add_argument("--keep-going", action="store_true", help="run the remaining commands after a failure")
     parser.add_argument("--continue-on-block", action="store_true", help="play moves the guard refuses, flagged")
+    parser.add_argument("--compare-no-obstacles", action="store_true",
+                        help="also plan every command without the avoid objects (results['no_obstacles'])")
     args = parser.parse_args()
-    plan_args = [f for f, on in (("--keep-going", args.keep_going), ("--continue-on-block", args.continue_on_block)) if on]
+    flags = (("--keep-going", args.keep_going), ("--continue-on-block", args.continue_on_block),
+             ("--compare-no-obstacles", args.compare_no_obstacles))  # fmt: skip
+    plan_args = [f for f, on in flags if on]
 
     sync(args.host, args.scenarios, args.robot_checkout)
     run(args.host, args.scenarios, plan_args)

@@ -14,6 +14,7 @@ import html
 import json
 import os
 import shutil
+import socket
 import threading
 import time
 import traceback
@@ -27,6 +28,9 @@ RUNS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "
 LOCAL = "local"  # target name of this machine
 # Log lines kept per machine (the page shows the tail; the full output is in the console).
 _LOG_LINES = 200
+# [s] A run of an older editor (no "pid" in run.json) still queued/running with its run.json untouched this
+# long is taken as interrupted: every stage rewrites it, and no stage takes nearly an hour.
+_STALE_S = 3600
 
 _runs: dict[str, dict] = {}  # run id -> run.json content, for runs started by this process
 _lock = threading.Lock()  # guards _runs and the run.json / index.html writes
@@ -58,6 +62,7 @@ def start_run(
     meta = {
         "id": run_id, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "name": scenario.get("name", stem),
         "file": file, "note": note, "flags": flags, "robot_checkout": robot_checkout,
+        "pid": os.getpid(), "pid_host": socket.gethostname(),  # the editor process running it (see get_run)
         "targets": {_target_name(t): {"host": None if t == LOCAL else t, "status": "queued", "stage": "",
                                       "error": None, "summary": None, "log": []}
                     for t in dict.fromkeys(targets)},
@@ -131,7 +136,9 @@ def timing_summary(run: Run) -> dict:
     """Outcome and planner time of a run, per command and in total, with and without obstacles.
 
     run: The planned run.
-    Returns: {"host", "devices", "build_s" (planner build or cache load), "planner_s" (all planner calls),
+    Returns: {"host", "devices", "build_s" (planner build or cache load), "build_reused" (True when an earlier run
+        of the same planner process already paid the build), "gripper_geometry" (the planner's gripper: "mesh",
+        "box fallback" or None), "planner_s" (all planner calls),
         "estimate_s" (robot time estimate, see report.command_times), "failed", the same three with a
         "free_" prefix for the run without obstacles (None if it was not planned), and "commands": per
         command {"cmd", "ok", "planner_s", "estimate_s", "free_ok", "free_planner_s", "free_estimate_s"}}.
@@ -153,6 +160,9 @@ def timing_summary(run: Run) -> dict:
         "host": run.machine.get("host", "?"),
         "devices": ", ".join(run.machine.get("jax_devices", [])),
         "build_s": round(sum(t["seconds"] for t in run.timings if t["call"].startswith("build_")), 2),
+        # The build was reused from an earlier run of the same process (this run did not wait for it).
+        "build_reused": bool((run.planner.get("planner_build") or {}).get("reused", False)),
+        "gripper_geometry": run.machine.get("gripper_geometry"),  # "mesh" / "box fallback"; None in old results
         "planner_s": round(sum(c["planner_s"] for c in commands), 3),
         "estimate_s": round(sum(c["estimate_s"] for c in commands), 3),
         "failed": sum(not c["ok"] for c in commands),
@@ -170,14 +180,33 @@ def _save_meta(meta: dict) -> None:
 
 
 def get_run(run_id: str) -> dict:
-    """A run's meta, live for runs of this process.
+    """A run's meta, live for runs of this process. A run another editor left queued/running and that editor
+    is gone (it died mid-run) reads as failed (interrupted), so it can be deleted.
 
     run_id: The run id. Returns: Its meta. Raises: FileNotFoundError for an unknown run.
     """
     if run_id in _runs:
         return _runs[run_id]
-    with open(os.path.join(RUNS_DIR, os.path.basename(run_id), "run.json")) as f:
-        return json.load(f)
+    path = os.path.join(RUNS_DIR, os.path.basename(run_id), "run.json")
+    with open(path) as f:
+        meta = json.load(f)
+    pid = meta.get("pid")
+    if pid is None:
+        gone = time.time() - os.path.getmtime(path) > _STALE_S
+    elif meta.get("pid_host") != socket.gethostname():
+        gone = False  # cannot tell from here
+    else:
+        try:
+            os.kill(pid, 0)  # signal 0: only checks that the process exists
+            gone = False
+        except ProcessLookupError:
+            gone = True
+        except PermissionError:
+            gone = False
+    for target in meta["targets"].values():
+        if gone and target["status"] in ("queued", "running"):
+            target.update(status="failed", stage="", error="interrupted: the editor running it stopped")
+    return meta
 
 
 def list_runs() -> list[dict]:
@@ -265,7 +294,9 @@ def write_index() -> None:
                 cmd = next(p[c]["cmd"] for p in per if c < len(p))
                 tds = "".join(f"<td>{_time_cell(p[c])}</td>" if c < len(p) else "<td>—</td>" for p in per)
                 lines.append(f"<tr><td>{c + 1}. {cmd}</td>{tds}</tr>")
-            builds = "".join(f"<td>{meta['targets'][n]['summary']['build_s']:.1f}s</td>" for n in done)
+            builds = "".join(f"<td>{meta['targets'][n]['summary']['build_s']:.1f}s"
+                             f"{' (reused)' if meta['targets'][n]['summary'].get('build_reused') else ''}</td>"
+                             for n in done)  # fmt: skip
             detail = (f"<details><summary>timing per command</summary><table><tr><th>command</th>{head}</tr>"
                       f"{''.join(lines)}<tr><td>planner build</td>{builds}</tr></table></details>")  # fmt: skip
         rows.append(

@@ -62,10 +62,12 @@
   #track { position: relative; flex: 1; padding-top: 16px; }
   #markers { position: absolute; top: 0; left: 0; right: 0; height: 16px; }
   /* A marker sits where the slider thumb (~16px wide) is when that sample is shown. */
-  .marker { position: absolute; transform: translateX(-50%); font-size: 10px; line-height: 14px; padding: 0 3px;
+  .marker-group { position: absolute; transform: translateX(-50%); display: flex; gap: 1px; }
+  .marker { font-size: 10px; line-height: 14px; padding: 0 3px;
             border-radius: 3px; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
   .marker.failed { background: var(--bad); }
-  .marker::after { content: ''; position: absolute; left: 50%; top: 14px; width: 1px; height: 6px; background: inherit; }
+  /* One tick per group, under its middle, at the sample the group's first marker jumps to. */
+  .marker-group::after { content: ''; position: absolute; left: 50%; top: 14px; width: 1px; height: 6px; background: var(--text); }
   #legend { position: absolute; top: 10px; right: 10px; background: var(--panel); border: 1px solid var(--line);
             border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--muted); }
   #legend div { display: flex; gap: 6px; align-items: center; }
@@ -104,6 +106,8 @@
       <div class="row">
         <button data-add="table">+ Table</button><button data-add="wall">+ Wall</button>
         <button data-add="capsule">+ Post</button><button data-add="sphere">+ Ball</button>
+        <button data-add="door" title="A board on a vertical hinge; turns when the arm pushes it">+ Door</button>
+        <button data-add="handle" title="A short tube on a hinge; mounted on the last door if there is one">+ Handle</button>
       </div>
       <div class="row"><button id="randObject" title="A random object within the arm's reach, clear of Billie at the start joints">🎲 Random object</button>
         <input id="objSeed" type="number" placeholder="seed" title="Empty draws a new one; the toast shows the seed used" style="width:90px"></div>
@@ -201,7 +205,10 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import URDFLoader from 'urdf-loader';
 
 const $ = (id) => document.getElementById(id);
-const ROLE_COLORS = { avoid: 0xd62728, eef_touch: 0x2ca02c };
+const ROLE_COLORS = { avoid: 0xd62728, eef_touch: 0x2ca02c, push: 0xa0703c };
+const PUSHABLE = ['door', 'handle'];  // object types that turn about a hinge (role "push")
+// Opacity of the outlines that show where a door or handle is at its min and max angles.
+const LIMIT_GHOST_OPACITY = 0.12;
 // Color of a URDF link by its clearance state (null = its own URDF color): clear, within the planner
 // margin, inside an object. Magenta stays visible on the red gripper and the red avoid objects.
 const STATE_COLORS = [null, 0xffa000, 0xff00ff];
@@ -429,7 +436,7 @@ async function refreshArm() {
     else {
       const [c, name] = finite.reduce((a, b) => (b[0] < a[0] ? b : a));
       const cls = c < 0 ? 'bad' : c < margin ? 'warn' : 'ok';
-      $('clearance').innerHTML = `closest avoid object: <span class="${cls}">${c.toFixed(0)} mm</span> <span class="muted">(${name})</span>`
+      $('clearance').innerHTML = `planner model: closest avoid object <span class="${cls}">${c.toFixed(0)} mm</span> <span class="muted">(${name})</span>`
         + meshNote(reply.summary[0]);
     }
   } catch (e) { toast(e.message, true); }
@@ -440,19 +447,24 @@ async function refreshArm() {
 /** Clearance state of a distance. mm: distance or null (none). Returns: 0 clear / 1 within the planner margin / 2 inside. */
 function clearanceState(mm) { return mm === null ? 0 : mm < 0 ? 2 : mm < model.margin_mm ? 1 : 0; }
 
+/** A signed distance for the labels. mm: distance. Returns: e.g. "+16 mm" or "-24 mm". */
+function signedMm(mm) { return `${mm >= 0 ? '+' : ''}${mm.toFixed(0)} mm`; }
+
 /**
  * The real-mesh clearance where it disagrees with the planner's capsules (e.g. the camera bracket
  * outside the gripper capsule), else ''. summary: one /api/fk or /api/playback summary entry.
- * Returns: HTML like "real mesh -24 mm inside table (planner model +16 mm)".
+ * Returns: HTML like " · real mesh: -24 mm inside table (link_gripper_and_camera; its planner capsule +16 mm)".
  */
 function meshNote(summary) {
   const { mesh_mm: m, mesh_link_capsule_mm: c } = summary;
   const state = clearanceState(m);
   if (m === null || state === Math.max(clearanceState(summary.capsule_mm), clearanceState(c))) return '';
+  // Past mesh_check's exact range the server sends only its lower bound (and the link may not be the closest).
+  const distance = summary.mesh_far ? `>${m.toFixed(0)} mm` : `${m.toFixed(0)} mm`;
   const where = state === 2 ? `inside ${esc(summary.mesh_object)}` : `from ${esc(summary.mesh_object)}`;
-  const planner = c === null ? '' : ` <span class="muted">(planner model ${c >= 0 ? '+' : ''}${c.toFixed(0)} mm)</span>`;
-  return ` <span class="${['ok', 'warn', 'bad'][state]}">real mesh ${m.toFixed(0)} mm ${where}</span>`
-    + `${planner} <span class="muted">${esc(summary.mesh_link)}</span>`;
+  const capsule = c === null || summary.mesh_far ? '' : `; its planner capsule ${signedMm(c)}`;
+  return ` · <span class="${['ok', 'warn', 'bad'][state]}">real mesh: ${distance} ${where}</span>`
+    + ` <span class="muted">(${esc(summary.mesh_link)}${capsule})</span>`;
 }
 
 // ----- objects ----------------------------------------------------------------------------------
@@ -478,7 +490,7 @@ function refreshWorld() {
 
 /** Draws the objects of the last /api/world reply; the selected one brighter. */
 function drawObjects() {
-  clearGroup(mapObjects); clearGroup(armObjects);
+  clearGroup(mapObjects); clearGroup(armObjects); hingeGroups.clear();
   if (!worldReply) return;
   scn.objects.forEach((spec, i) => {
     const shape = worldReply.objects[i];
@@ -488,13 +500,63 @@ function drawObjects() {
       color: ROLE_COLORS[spec.role || 'avoid'] ?? 0x888888, transparent: true, opacity: selected ? 0.85 : 0.45,
       emissive: selected ? 0x332200 : 0x000000, depthWrite: !selected,
     });
-    const parent = spec.frame === 'map' ? mapObjects : armObjects;
+    let parent = spec.frame === 'map' ? mapObjects : armObjects;
+    if (shape.hinge) {
+      drawLimitGhosts(i, parent);
+      parent = hingeGroup(i, parent);
+    }
     for (const c of shape.capsules) {
       const mesh = capsuleBetween(new THREE.Vector3(c[0], c[1], c[2]), new THREE.Vector3(c[3], c[4], c[5]), c[6], material);
       mesh.userData.pick = { kind: 'object', index: i };
       parent.add(mesh);
     }
   });
+  if (play?.pushes) applyPushAngles(play.pushes.angles_deg[Math.floor(playPos)]);
+}
+
+const hingeGroups = new Map();  // object index -> the group a door or handle is drawn in, turned about its hinge
+
+/** A door's or handle's drawing group (at 0°), registered for turning. i: object index; parent: its frame group. Returns: the group. */
+function hingeGroup(i, parent) {
+  const group = new THREE.Group();
+  group.matrixAutoUpdate = false;
+  parent.add(group);
+  hingeGroups.set(i, group);
+  return group;
+}
+
+/**
+ * The transform that turns object i about its hinge by an angle, after its door turned (a mounted handle).
+ * i: object index; angles: Map object index -> degrees (missing = 0). Returns: Matrix4 in the object's frame.
+ */
+function hingeMatrix(i, angles) {
+  const hinge = worldReply.objects[i].hinge;
+  const p = new THREE.Vector3(...hinge.point_m), axis = new THREE.Vector3(...hinge.axis);
+  const turn = new THREE.Matrix4().makeTranslation(p.x, p.y, p.z)
+    .multiply(new THREE.Matrix4().makeRotationAxis(axis, THREE.MathUtils.degToRad(angles.get(i) ?? 0)))
+    .multiply(new THREE.Matrix4().makeTranslation(-p.x, -p.y, -p.z));
+  const door = scn.objects.findIndex((o) => o.type === 'door' && o.name === scn.objects[i].mounted_on);
+  return door >= 0 && worldReply.objects[door]?.hinge ? hingeMatrix(door, angles).multiply(turn) : turn;
+}
+
+/** Faint copies of a door or handle at its min and max angles. i: object index; parent: its frame group. */
+function drawLimitGhosts(i, parent) {
+  const { hinge, capsules } = worldReply.objects[i];
+  const material = new THREE.MeshBasicMaterial({ color: ROLE_COLORS.push, transparent: true, opacity: LIMIT_GHOST_OPACITY, depthWrite: false });
+  for (const limit of [hinge.min_deg, hinge.max_deg]) {
+    if (limit === 0) continue;
+    const ghost = new THREE.Group();
+    ghost.matrixAutoUpdate = false;
+    ghost.matrix.copy(hingeMatrix(i, new Map([[i, limit]])));
+    for (const c of capsules) ghost.add(capsuleBetween(new THREE.Vector3(c[0], c[1], c[2]), new THREE.Vector3(c[3], c[4], c[5]), c[6], material));
+    parent.add(ghost);
+  }
+}
+
+/** Turns the doors and handles to a playback sample's angles. row: angles per pushed object (null = all at 0°). */
+function applyPushAngles(row) {
+  const angles = new Map((play?.pushes?.objects ?? []).map((obj, p) => [obj, row ? row[p] : 0]));
+  for (const [i, group] of hingeGroups) group.matrix.copy(worldReply?.objects[i]?.hinge ? hingeMatrix(i, angles) : new THREE.Matrix4());
 }
 
 /** The capsule budget and the object rows. */
@@ -522,6 +584,9 @@ const FIELDS = {
   wall: [['start x,y', 'start_xy_mm', 2], ['end x,y', 'end_xy_mm', 2], ['height', 'height_mm', 1], ['thickness', 'thickness_mm', 1]],
   capsule: [['start x,y,z', 'start_mm', 3], ['end x,y,z', 'end_mm', 3], ['radius', 'radius_mm', 1]],
   sphere: [['center x,y,z', 'center_mm', 3], ['radius', 'radius_mm', 1]],
+  door: [['hinge x,y', 'hinge_xy_mm', 2], ['yaw ° (to free edge)', 'yaw_deg', 1], ['width', 'width_mm', 1], ['height', 'height_mm', 1],
+    ['gap above floor', 'bottom_mm', 1], ['thickness', 'thickness_mm', 1]],
+  handle: [['hinge end x,y,z', 'start_mm', 3], ['free end x,y,z', 'end_mm', 3], ['radius', 'radius_mm', 1], ['hinge axis x,y,z', 'axis', 3]],
 };
 
 /**
@@ -550,13 +615,18 @@ function renderObjectForm() {
     <div class="row small muted">${o.frame === 'map' ? 'Map frame: z is the height above the floor.' : 'Arm frame (moves with Billie).'} All lengths mm.</div>`;
   const [nameInput] = form.getElementsByTagName('input'), [roleSelect] = form.getElementsByTagName('select');
   roleSelect.value = o.role || 'avoid';
-  nameInput.addEventListener('input', () => { o.name = nameInput.value; edited(false); renderObjectList(); });
+  if (PUSHABLE.includes(o.type)) { roleSelect.innerHTML = '<option value="push">push (turns when pushed; not sent to the planner)</option>'; roleSelect.disabled = true; }
+  nameInput.addEventListener('input', () => {
+    if (o.type === 'door') scn.objects.forEach((h) => { if (h.mounted_on === o.name) h.mounted_on = nameInput.value; });
+    o.name = nameInput.value; edited(false); renderObjectList();
+  });
   roleSelect.addEventListener('change', () => { o.role = roleSelect.value; edited(); });
   for (const [label, key, n] of FIELDS[o.type] || []) {
     const values = n === 1 ? [o[key] ?? 0] : o[key];
     form.append(numberRow(label, values, (v) => { o[key] = n === 1 ? v[0] : v; edited(); attachGizmo(); }, key === 'yaw_deg' ? 5 : 10));
   }
   if (o.type === 'table' || o.type === 'wall') form.append(spacingRow(o));
+  if (PUSHABLE.includes(o.type)) form.append(...hingeRows(o));
   const actions = document.createElement('div'); actions.className = 'row';
   actions.innerHTML = '<button data-act="dup">Duplicate</button><button data-act="del">Delete</button>';
   actions.querySelector('[data-act=dup]').onclick = () => {
@@ -568,6 +638,34 @@ function renderObjectForm() {
   form.append(actions);
   box.append(form);
   updateSpacingInfo();
+}
+
+/**
+ * The hinge fields of a door or handle: turn direction, limits from the initial pose (0°), and for a
+ * handle the door it is mounted on. o: the object. Returns: the row elements.
+ */
+function hingeRows(o) {
+  const row = document.createElement('div'); row.className = 'row';
+  const axisWord = o.type === 'door' ? 'seen from above' : 'looking down the hinge axis';
+  row.innerHTML = `<label title="Positive turn, ${axisWord}">turns</label><select data-k="direction">
+    <option value="ccw">counter-clockwise (${axisWord})</option><option value="cw">clockwise (${axisWord})</option></select>`;
+  const direction = row.querySelector('select');
+  direction.value = o.direction ?? 'ccw';
+  direction.onchange = () => { o.direction = direction.value; edited(); };
+  const limits = numberRow('min, max °', [o.min_deg ?? 0, o.max_deg ?? 90], (v) => { [o.min_deg, o.max_deg] = v; edited(); }, 5);
+  limits.title = 'Turn limits from the initial pose (0°); min ≤ 0 ≤ max';
+  const rows = [row, limits];
+  if (o.type === 'handle') {
+    const mount = document.createElement('div'); mount.className = 'row';
+    const doors = scn.objects.filter((d) => d.type === 'door' && d.frame === o.frame);
+    mount.innerHTML = `<label title="A mounted handle turns with its door">mounted on</label><select class="wide"><option value="">nothing (fixed hinge)</option>
+      ${doors.map((d) => `<option>${esc(d.name)}</option>`).join('')}</select>`;
+    const select = mount.querySelector('select');
+    select.value = o.mounted_on ?? '';
+    select.onchange = () => { if (select.value) o.mounted_on = select.value; else delete o.mounted_on; edited(); };
+    rows.push(mount);
+  }
+  return rows;
 }
 
 /** The spacing field of a table or wall; empty = the robot's builder decides. o: the object. Returns: the row. */
@@ -595,7 +693,7 @@ function updateSpacingInfo() {
     + (gap > 0.5 ? `<span class="warn">${gap.toFixed(0)} mm holes</span>` : 'no holes');
 }
 
-/** A new object in front of the arm, in the map frame. type: table | wall | capsule | sphere. */
+/** A new object in front of the arm, in the map frame. type: table | wall | capsule | sphere | door | handle. */
 function addObject(type) {
   const p = armRoot.localToWorld(new THREE.Vector3(NEW_OBJECT_AHEAD_MM / 1000, 0, 0)).multiplyScalar(1000);
   const [x, y] = [round(p.x, 0), round(p.y, 0)], yaw = round(THREE.MathUtils.radToDeg(billieRoot.rotation.z), 1);
@@ -607,10 +705,37 @@ function addObject(type) {
     wall: { name: `wall ${count}`, ...base, start_xy_mm: along(-200), end_xy_mm: along(200), height_mm: 900, thickness_mm: 50 },
     capsule: { name: `post ${count}`, ...base, start_mm: [x, y, 0], end_mm: [x, y, 900], radius_mm: 40 },
     sphere: { name: `ball ${count}`, ...base, center_mm: [x, y, 800], radius_mm: 60 },
+    door: { name: `door ${count}`, ...base, role: 'push', hinge_xy_mm: along(-400), yaw_deg: yaw + 90, width_mm: 800, height_mm: 2000,
+      bottom_mm: 10, thickness_mm: 40, direction: 'ccw', min_deg: 0, max_deg: 90 },
+    handle: newHandle(count, [x, y], yaw),
   };
   scn.objects.push(specs[type]);
   select('object', scn.objects.length - 1);
   edited();
+}
+
+/**
+ * A new handle: on the arm's side of the last door, near its free edge, its lever pointing to the
+ * hinge and turning about the door's normal (pushed down = clockwise seen from the arm); without a
+ * door, in front of the arm. count: its number; ahead: [x, y] mm in front of the arm; yaw: Billie's heading °.
+ * Returns: the handle description (map frame).
+ */
+function newHandle(count, ahead, yaw) {
+  const door = [...scn.objects].reverse().find((o) => o.type === 'door' && o.frame === 'map');
+  const base = { name: `handle ${count}`, role: 'push', frame: 'map', type: 'handle', radius_mm: 12, direction: 'cw', min_deg: 0, max_deg: 45 };
+  if (!door) {
+    const r = THREE.MathUtils.degToRad(yaw);
+    return { ...base, start_mm: [ahead[0], ahead[1], 1000], end_mm: [round(ahead[0] - 120 * Math.sin(r), 0), round(ahead[1] + 120 * Math.cos(r), 0), 1000],
+      axis: [round(-Math.cos(r), 3), round(-Math.sin(r), 3), 0] };
+  }
+  const a = THREE.MathUtils.degToRad(door.yaw_deg ?? 0), along = [Math.cos(a), Math.sin(a)];
+  let normal = [-along[1], along[0]];
+  const arm = armRoot.localToWorld(new THREE.Vector3()).multiplyScalar(1000);
+  if ((arm.x - door.hinge_xy_mm[0]) * normal[0] + (arm.y - door.hinge_xy_mm[1]) * normal[1] < 0) normal = [-normal[0], -normal[1]];
+  const out = door.thickness_mm / 2 + 40, at = door.width_mm - 80, z = (door.bottom_mm ?? 0) + 1000;
+  const start = [door.hinge_xy_mm[0] + at * along[0] + out * normal[0], door.hinge_xy_mm[1] + at * along[1] + out * normal[1]];
+  return { ...base, mounted_on: door.name, start_mm: [...start.map((v) => round(v, 0)), z],
+    end_mm: [round(start[0] - 120 * along[0], 0), round(start[1] - 120 * along[1], 0), z], axis: [round(normal[0], 3), round(normal[1], 3), 0] };
 }
 
 /**
@@ -625,6 +750,8 @@ function specPoints(spec) {
     case 'wall': return [['start_xy_mm', v(spec.start_xy_mm, fz)], ['end_xy_mm', v(spec.end_xy_mm, fz)]];
     case 'capsule': return [['start_mm', v(spec.start_mm, spec.start_mm[2])], ['end_mm', v(spec.end_mm, spec.end_mm[2])]];
     case 'sphere': return [['center_mm', v(spec.center_mm, spec.center_mm[2])]];
+    case 'door': return [['hinge_xy_mm', v(spec.hinge_xy_mm, fz)]];
+    case 'handle': return [['start_mm', v(spec.start_mm, spec.start_mm[2])], ['end_mm', v(spec.end_mm, spec.end_mm[2])]];
   }
   return [];
 }
@@ -638,10 +765,14 @@ function moveSpec(spec, delta) {
   for (const [key, p] of specPoints(spec)) {
     p.applyMatrix4(delta);
     if (spec.type === 'table') { spec[key] = [round(p.x * 1000, 1), round(p.y * 1000, 1)]; spec.top_height_mm = round(p.z * 1000 - fz, 1); }
-    else if (spec.type === 'wall') spec[key] = [round(p.x * 1000, 1), round(p.y * 1000, 1)];
+    else if (spec.type === 'wall' || spec.type === 'door') spec[key] = [round(p.x * 1000, 1), round(p.y * 1000, 1)];
     else spec[key] = p.toArray().map((c) => round(c * 1000, 1));
   }
-  if (spec.type === 'table') {
+  if (spec.type === 'handle') {
+    const axis = new THREE.Vector3(...spec.axis).applyMatrix4(new THREE.Matrix4().extractRotation(delta));
+    spec.axis = axis.toArray().map((c) => round(c, 4));
+  }
+  if (spec.type === 'table' || spec.type === 'door') {
     const e = new THREE.Euler().setFromRotationMatrix(new THREE.Matrix4().extractRotation(delta), 'ZYX');
     spec.yaw_deg = round((spec.yaw_deg ?? 0) + THREE.MathUtils.radToDeg(e.z), 1);
   }
@@ -651,6 +782,7 @@ function moveSpec(spec, delta) {
 const proxy = new THREE.Object3D();      // what the gizmo drags for an object
 proxy.userData.keep = true;
 let proxyStart = null, specStart = null; // the proxy and object at drag start
+let mountedStart = [];                   // [index, handle] mounted on the dragged door, at drag start
 
 /** Attaches the gizmo to the selection: Billie, an object's proxy, or a pose target. */
 function attachGizmo() {
@@ -671,10 +803,10 @@ function attachGizmo() {
     proxy.position.set(0, 0, 0);
     points.forEach(([, p]) => proxy.position.add(p));
     proxy.position.divideScalar(points.length);
-    proxy.rotation.set(0, 0, spec.type === 'table' ? THREE.MathUtils.degToRad(spec.yaw_deg ?? 0) : 0);
+    proxy.rotation.set(0, 0, ['table', 'door'].includes(spec.type) ? THREE.MathUtils.degToRad(spec.yaw_deg ?? 0) : 0);
     if (spec.type === 'sphere' && rotate) return;
-    if (rotate && spec.type !== 'capsule') gizmo.showX = gizmo.showY = false;
-    if (!rotate && spec.type === 'wall') gizmo.showZ = false;
+    if (rotate && !['capsule', 'handle'].includes(spec.type)) gizmo.showX = gizmo.showY = false;
+    if (!rotate && (spec.type === 'wall' || spec.type === 'door')) gizmo.showZ = false;
     gizmo.attach(proxy);
   } else if (sel.kind === 'command' && scn.commands[sel.index].cmd === 'pose') {
     const target = targets.children.find((t) => t.userData.pick.index === sel.index);
@@ -686,6 +818,10 @@ gizmo.addEventListener('mouseDown', () => {
   proxy.updateMatrix();
   proxyStart = proxy.matrix.clone();
   if (sel.kind === 'object') specStart = JSON.parse(JSON.stringify(scn.objects[sel.index]));
+  // A door's mounted handles move with it: their state at drag start, by object index.
+  mountedStart = specStart?.type === 'door'
+    ? scn.objects.map((o, i) => [i, o]).filter(([, o]) => o.type === 'handle' && o.mounted_on === specStart.name).map(([i, o]) => [i, JSON.parse(JSON.stringify(o))])
+    : [];
 });
 gizmo.addEventListener('objectChange', () => {
   if (sel.kind === 'billie') {
@@ -697,6 +833,7 @@ gizmo.addEventListener('objectChange', () => {
     const spec = JSON.parse(JSON.stringify(specStart));
     moveSpec(spec, delta);
     scn.objects[sel.index] = spec;
+    for (const [i, start] of mountedStart) { const h = JSON.parse(JSON.stringify(start)); moveSpec(h, delta); scn.objects[i] = h; }
     renderObjectForm(); edited();
   } else if (sel.kind === 'command') {
     const target = gizmo.object;
@@ -1054,7 +1191,8 @@ function timingTable(meta) {
   }
   const totals = done.map(([, t]) => timeCell({ ...t.summary, ok: !t.summary.failed, free_ok: !t.summary.free_failed }));
   rows.push(`<tr><td><b>total</b></td>${totals.join('')}</tr>`);
-  rows.push(`<tr class="muted"><td>planner build</td>${done.map(([, t]) => `<td>${t.summary.build_s.toFixed(1)}</td>`).join('')}</tr>`);
+  // A reused build was paid by an earlier run of that planner process, not by this run.
+  rows.push(`<tr class="muted"><td>planner build</td>${done.map(([, t]) => `<td${t.summary.build_reused ? ' title="built before this run, by an earlier run of the same planner"' : ''}>${t.summary.build_s.toFixed(1)}${t.summary.build_reused ? ' (reused)' : ''}</td>`).join('')}</tr>`);
   const free = done.some(([, t]) => t.summary.free_planner_s != null);
   return `<table class="timing" title="planner: time in planner calls · estimate: robot time (replays: BufferingPlayer wall time)">
     <tr><th>seconds: planner / estimate${free ? '<br><span class="muted">grey: without obstacles</span>' : ''}</th>${done.map(([n]) => `<th>${esc(n)}</th>`).join('')}</tr>${rows.join('')}</table>`;
@@ -1100,11 +1238,13 @@ function renderHistory() {
 }
 
 let playing = false, playPos = 0, lastFrame = 0;
+let markerNote = '';  // why the clicked marker's command has no samples (a ✗ marker), until the next play or scrub
 
 /** Shows a machine's run: arm path, timeline, command outcomes and messages. reply: /api/playback reply; label: what is played. */
 function startPlayback(reply, label) {
   play = reply; gizmo.detach();
-  $('outcomes').innerHTML = `<div class="small muted">Playing ${esc(label)}</div>` + reply.commands.map((c, i) => `<div class="small">${i + 1}.
+  $('outcomes').innerHTML = `<div class="small muted">Playing ${esc(label)}</div>`
+    + (reply.warnings || []).map((w) => `<div class="small bad">⚠ ${esc(w)}</div>`).join('') + reply.commands.map((c, i) => `<div class="small">${i + 1}.
     ${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${c.cmd} <span class="muted">${c.seconds}s</span>${c.error ? `<div class="bad">${esc(c.error)}</div>` : ''}</div>`).join('');
   const levels = { ERROR: 'bad', WARNING: 'warn', DEBUG: 'muted' };
   $('events').innerHTML = reply.events.map((e) => `<div class="${levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}</div>`).join('');
@@ -1118,28 +1258,41 @@ function startPlayback(reply, label) {
   renderCommandList(); showSample(0);
 }
 
+// [px] Markers whose ticks are closer than about one marker's width ("12✗" at 10px) are drawn side by side.
+const MARKER_GAP_PX = 26;
+
 /**
  * Marks on the play bar where the arm reaches each command's last target (red if the command
- * failed); a click jumps there. reply: /api/playback reply.
+ * failed); a click jumps there. Markers that would overlap (e.g. a command failing before its
+ * first target, at the previous command's end) sit side by side in one group over one tick.
+ * reply: /api/playback reply.
  */
 function renderMarkers(reply) {
   const last = new Map();  // command -> last sample index moving into one of its targets
   reply.owner.forEach((i, k) => { if (i >= 0) last.set(reply.targets[i].command, k); });
-  const span = Math.max(reply.poses.length - 1, 1);
+  const span = Math.max(reply.poses.length - 1, 1), width = Math.max($('markers').clientWidth - 16, 1);
+  const groups = [];  // {at: sample of the tick, html: its markers}
   let at = 0;  // where the arm is when a command starts: the previous command's end
-  $('markers').innerHTML = reply.commands.map((c, i) => {
+  reply.commands.forEach((c, i) => {
     const reached = last.has(i);
     if (reached) at = last.get(i);
-    const title = reached ? `cmd ${i + 1} ${c.cmd}: last target reached (sample ${at})` : `cmd ${i + 1} ${c.cmd}: failed before sending any target`;
-    return `<span class="marker ${c.ok ? '' : 'failed'}" data-sample="${at}" style="left: calc(8px + (100% - 16px) * ${at / span})"
+    const note = reached ? '' : `cmd ${i + 1} ${c.cmd} failed before sending any target`;
+    const title = reached ? `cmd ${i + 1} ${c.cmd}: last target reached (sample ${at})` : note;
+    const marker = `<span class="marker ${c.ok ? '' : 'failed'}" data-sample="${at}" data-note="${esc(note)}"
       title="${esc(title)}">${i + 1}${reached ? '' : '✗'}</span>`;
-  }).join('');
+    const group = groups[groups.length - 1];
+    if (group && (at - group.at) / span * width < MARKER_GAP_PX) group.html += marker;
+    else groups.push({ at, html: marker });
+  });
+  $('markers').innerHTML = groups.map((g) =>
+    `<span class="marker-group" style="left: calc(8px + (100% - 16px) * ${g.at / span})">${g.html}</span>`).join('');
 }
 
 /** Leaves the playback and shows the previewed joints again. */
 function exitPlayback() {
   if (!play) return;
   play = null; playing = false; $('hud').style.display = 'none';
+  applyPushAngles(null);
   buildCapsules(model.links);
   if (pathLine) { armRoot.remove(pathLine); pathLine.geometry.dispose(); pathLine = null; }
   renderCommandList(); attachGizmo(); refreshArm();
@@ -1150,13 +1303,28 @@ function showSample(k) {
   const i = play.owner[k];
   setRobotJoints(play.joints_deg[k]);
   showArm(play.poses[k], play.link_state[k]);
+  if (play.pushes) applyPushAngles(play.pushes.angles_deg[k]);
   $('timeline').value = k;
   const t = i >= 0 ? play.targets[i] : null;
-  const summary = play.summary[k], worst = Math.max(clearanceState(summary.capsule_mm), clearanceState(summary.mesh_link_capsule_mm));
+  const summary = play.summary[k], c = summary.capsule_mm, worst = clearanceState(c);
   $('playLabel').innerHTML = (t ? `cmd ${t.command + 1} ${esc(scn.commands[t.command]?.cmd ?? '')}: ${esc(t.kind)} #${i}` : 'start')
+    + (markerNote ? ` · <span class="bad">${esc(markerNote)}</span>` : '')
     + (t?.blocked ? ` <span class="bad">guard refused: ${esc(t.blocked)}</span>` : '')
-    + (worst === 2 ? ' <span class="bad">inside an object</span>' : worst === 1 ? ' <span class="warn">within margin</span>' : '')
-    + meshNote(summary);
+    + (worst === 2 ? ` · <span class="bad">planner model: inside an object (${signedMm(c)})</span>`
+      : worst === 1 ? ` · <span class="warn">planner model: within margin (${signedMm(c)})</span>` : '')
+    + meshNote(summary) + pushNote(k);
+}
+
+/** The playback label's doors and handles part at sample k: turned angles, blocked pushes. Returns: HTML ('' if none). */
+function pushNote(k) {
+  if (!play.pushes) return '';
+  return play.pushes.objects.map((obj, p) => {
+    const name = esc(scn.objects[obj]?.name ?? `object ${obj + 1}`), angle = play.pushes.angles_deg[k][p];
+    const blocked = play.pushes.blocked_mm[k][p], pusher = play.pushes.pusher[k][p];
+    if (blocked > 0) return ` · <span class="bad">${name} at its limit (${angle.toFixed(1)}°): arm ${blocked.toFixed(0)} mm inside (${esc(pusher ?? '?')})</span>`;
+    if (pusher) return ` · <span class="warn">${name} pushed to ${angle.toFixed(1)}° by ${esc(pusher)}</span>`;
+    return angle ? ` · <span class="muted">${name} ${angle.toFixed(1)}°</span>` : '';
+  }).join('');
 }
 
 // ----- wiring -----------------------------------------------------------------------------------
@@ -1181,6 +1349,7 @@ $('editStart').onclick = () => select(sel.kind === 'start' ? null : 'start');
 $('jumpInit').onclick = () => { exitPlayback(); if (sel.kind === 'command' || sel.kind === 'start') select(null); setPreview(scn.start_joints_deg); };
 $('markers').addEventListener('click', (e) => {
   const k = e.target.dataset.sample; if (k === undefined) return;
+  markerNote = e.target.dataset.note || '';
   playing = false; $('play').textContent = '▶'; playPos = +k; showSample(playPos);
 });
 $('cleanHistory').onclick = async () => {
@@ -1238,8 +1407,8 @@ $('modeMove').onclick = () => setGizmoMode('translate');
 $('modeRotate').onclick = () => setGizmoMode('rotate');
 $('focus').onclick = focusBillie;
 $('capsules').onclick = toggleCapsules;
-$('play').onclick = () => { playing = !playing; $('play').textContent = playing ? '⏸' : '▶'; if (playing && playPos >= play.poses.length - 1) playPos = 0; };
-$('timeline').addEventListener('input', () => { playing = false; $('play').textContent = '▶'; playPos = +$('timeline').value; showSample(playPos); });
+$('play').onclick = () => { markerNote = ''; playing = !playing; $('play').textContent = playing ? '⏸' : '▶'; if (playing && playPos >= play.poses.length - 1) playPos = 0; };
+$('timeline').addEventListener('input', () => { markerNote = ''; playing = false; $('play').textContent = '▶'; playPos = +$('timeline').value; showSample(playPos); });
 $('closePlayback').onclick = exitPlayback;
 window.addEventListener('keydown', (e) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;

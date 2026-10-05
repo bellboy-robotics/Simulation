@@ -5,6 +5,8 @@ Every object has a role:
   detours and reroutes, exactly like the robot's virtual obstacles.
 - "eef_touch": the EEF may touch it, the rest of the arm may not (WORLD_COLLISION_DISCUSSION.md §3,
   Set B). Not implemented in the planner yet, so these objects are only drawn and measured.
+- "push": a door or a handle, turning about a hinge when the arm pushes it (see pushables.py). Not
+  sent to the planner (the arm is meant to touch it); the simulation turns it out of the arm's way.
 
 Coordinates are in the xArm base frame (the planner's frame), in millimeters, like the arm's
 `position_aa_rad` status. Heights "above the floor" use the arm base height above the floor.
@@ -24,7 +26,11 @@ from billie_utils.messages.pyroki_world_poc import (
     wall_capsules,
 )
 
-ROLES = ("avoid", "eef_touch")
+ROLES = ("avoid", "eef_touch", "push")
+# Object types that turn about a hinge; their role is always "push".
+PUSHABLE_TYPES = ("door", "handle")
+# Spacing of a door's capsules, in radii, when it sets none: the robot's wall builder's overlap.
+_DOOR_SPACING_RADII = 1.2
 
 
 @dataclass
@@ -53,9 +59,12 @@ class World:
         spec: Object description, see object_capsules for the types and their fields.
         Returns: The added object.
         """
-        role = spec.get("role", "avoid")
+        pushable = spec["type"] in PUSHABLE_TYPES
+        role = spec.get("role", "push" if pushable else "avoid")
         if role not in ROLES:
             raise ValueError(f"Object {spec.get('name')!r}: role must be one of {ROLES}, got {role!r}")
+        if pushable != (role == "push"):
+            raise ValueError(f"Object {spec.get('name')!r}: doors and handles (only) have role 'push', got {role!r}")
         starts, ends, radii = object_capsules(spec, self.floor_z_m)
         obj = WorldObject(spec.get("name", spec["type"]), role, spec, starts, ends, radii)
         self.objects.append(obj)
@@ -105,6 +114,15 @@ def object_capsules(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarra
           (above the floor), thickness_mm.
           Tables and walls may set spacing_mm: the distance between neighbouring capsule centers
           (radius = thickness / 2). Without it the robot's builders choose it.
+        - "door": a board turning about a vertical hinge at one edge. hinge_xy_mm, yaw_deg (direction
+          from the hinge to the free edge at 0 deg), width_mm, height_mm, bottom_mm (gap above the
+          floor, default 0), thickness_mm, optional spacing_mm; plus the hinge fields below.
+        - "handle": a short tube turning about a hinge through its start. start_mm (on the hinge),
+          end_mm (free end at 0 deg), radius_mm, axis (hinge axis direction [x, y, z]), optional
+          mounted_on (name of a door it turns with); plus the hinge fields below.
+          Hinge fields: direction "ccw" or "cw" (positive turn, looking down the hinge axis from its
+          tip; a door's axis points up), min_deg and max_deg (limits from the initial pose, 0 deg).
+        Returned capsules are at 0 deg.
         - "capsule": start_mm [x, y, z], end_mm [x, y, z], radius_mm.
         - "sphere": center_mm [x, y, z], radius_mm.
     floor_z_m: Arm-frame z of the floor, meters.
@@ -145,7 +163,42 @@ def object_capsules(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarra
     if kind == "sphere":
         center = np.asarray(spec["center_mm"]) / 1000.0
         return center[None], center[None], np.array([spec["radius_mm"] / 1000.0])
-    raise ValueError(f"Unknown object type {kind!r}; use table, wall, capsule or sphere")
+    if kind == "door":
+        radius = spec["thickness_mm"] / 2.0
+        yaw = np.deg2rad(spec.get("yaw_deg", 0.0))
+        along = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+        bottom = floor_z_m * 1000.0 + spec.get("bottom_mm", 0.0)
+        middle, half = bottom + spec["height_mm"] / 2.0, max(spec["height_mm"] / 2.0 - radius, 0.0)
+        hinge = np.array([*spec["hinge_xy_mm"], middle])
+        first, last = hinge + radius * along, hinge + (spec["width_mm"] - radius) * along  # edges stay at the board's
+        spacing = spec.get("spacing_mm") or _DOOR_SPACING_RADII * radius
+        return capsule_row(first, last, np.array([0.0, 0.0, half]), radius, spacing)
+    if kind == "handle":
+        start, end = np.asarray(spec["start_mm"]) / 1000.0, np.asarray(spec["end_mm"]) / 1000.0
+        return start[None], end[None], np.array([spec["radius_mm"] / 1000.0])
+    raise ValueError(f"Unknown object type {kind!r}; use table, wall, capsule, sphere, door or handle")
+
+
+def hinge_of(spec: dict, floor_z_m: float) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """The hinge a door or handle turns about, with positive angles in its configured direction.
+
+    spec: A door or handle description (see object_capsules), in the frame its capsules are in.
+    floor_z_m: z of the floor in that frame, meters (a door's hinge point sits on it).
+    Returns: (point on the hinge axis (3,) m; unit axis (3,), flipped for "cw" so a positive angle
+        turns the configured way (right-hand rule); min_deg; max_deg).
+    """
+    sign = {"ccw": 1.0, "cw": -1.0}[spec.get("direction", "ccw")]
+    if spec["type"] == "door":
+        point, axis = np.array([*np.asarray(spec["hinge_xy_mm"]) / 1000.0, floor_z_m]), np.array([0.0, 0.0, 1.0])
+    else:
+        point, axis = np.asarray(spec["start_mm"]) / 1000.0, np.asarray(spec["axis"], dtype=np.float64)
+        if np.linalg.norm(axis) < 1e-9:
+            raise ValueError(f"Handle {spec.get('name')!r}: its axis must not be zero")
+        axis = axis / np.linalg.norm(axis)
+    min_deg, max_deg = float(spec.get("min_deg", 0.0)), float(spec.get("max_deg", 90.0))
+    if not min_deg <= 0.0 <= max_deg:
+        raise ValueError(f"Object {spec.get('name')!r}: need min_deg <= 0 <= max_deg, got {min_deg}..{max_deg}")
+    return point, sign * axis, min_deg, max_deg
 
 
 def capsule_row(
@@ -209,8 +262,15 @@ def object_in_arm_frame(spec: dict, billie: dict | None, arm_base_height_m: floa
         out["start_mm"], out["end_mm"] = to_arm(spec["start_mm"])[0], to_arm(spec["end_mm"])[0]
     elif kind == "sphere":
         out["center_mm"] = to_arm(spec["center_mm"])[0]
+    elif kind == "door":
+        out["hinge_xy_mm"], out["yaw_deg"] = to_arm(spec["hinge_xy_mm"], spec.get("yaw_deg", 0.0))
+    elif kind == "handle":
+        out["start_mm"], out["end_mm"] = to_arm(spec["start_mm"])[0], to_arm(spec["end_mm"])[0]
+        turn = np.deg2rad(to_arm([0.0, 0.0])[1])  # how much the arm frame is turned from the map
+        ax, ay, az = spec["axis"]
+        out["axis"] = [float(ax * np.cos(turn) - ay * np.sin(turn)), float(ax * np.sin(turn) + ay * np.cos(turn)), float(az)]
     else:
-        raise ValueError(f"Unknown object type {kind!r}; use table, wall, capsule or sphere")
+        raise ValueError(f"Unknown object type {kind!r}; use table, wall, capsule, sphere, door or handle")
     return out
 
 

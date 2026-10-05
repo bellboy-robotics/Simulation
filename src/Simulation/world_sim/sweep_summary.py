@@ -95,7 +95,7 @@ body {{ font: 13px -apple-system, sans-serif; margin: 20px; }} table {{ border-c
 td, th {{ border: 1px solid #ddd; padding: 3px 8px; vertical-align: top; text-align: left; }}</style></head><body>
 <h2>{sweep_id}</h2><p>{len({r['scenario'] for r in rows})} scenarios, {len(rows)} commands, {len(flagged)} flagged ·
 ran on <b>{html.escape(str(machine.get('host', '?')))}</b> {html.escape(str(machine.get('jax_devices', '')))} ·
-planner build {build} · sweep {summary.get('elapsed_s', 0) / 60:.1f} min{'' if summary.get('finished') else ' · <b>not finished</b>'}</p>
+planner build {build} · detours by <b>{summary.get('detour_planner', 'batch_ik')}</b> · sweep {summary.get('elapsed_s', 0) / 60:.1f} min{'' if summary.get('finished') else ' · <b>not finished</b>'}</p>
 <h3>Planner time per command (all commands)</h3><table><tr><th>command</th><th>planner time</th><th>slowest replay batch</th>
 <th>planning before a replay moves</th></tr>{timing}</table>{''.join(sections)}
 <p>Repro JSONs are also in the editor's scenarios list as {sweep_id}-…; each has a "flag" block with the problem,
