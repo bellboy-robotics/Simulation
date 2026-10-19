@@ -7,7 +7,8 @@
 From an occupancy snapshot the field is built with spatial_awareness's own code (occupancy_field.build_field: holes
 filled, distances by the box rule, capped as the planner gets them). Billie's base is not cleared (the snapshot has
 no robot heading) and AutoXing's walls are not added. From an .esdfbin the crop is cut as the planner cuts it.
-Two pages, next to the snapshot: esdf_3d.html (opened) shows the field in 3D: the room's cells as cubes colored by
+With --host, a local page with an Update button and the history of updates (esdf_server.py); --static, --file
+and --esdf write two pages next to the snapshot instead. esdf_3d.html (opened) shows the field in 3D: the room's cells as cubes colored by
 height, the 5cm and 10cm keep-out shells and the never-observed cells, each switchable in the legend, and Billie
 (base, arm and gripper from the planner's URDF at the robot's joints, from the mapper's robot.json), with the map's
 floor height around it.
@@ -17,6 +18,7 @@ room in cm (black = occupied), unknown cells shaded. The arm base is marked on b
 
 import argparse
 import glob
+import html
 import json
 import os
 import shutil
@@ -67,7 +69,7 @@ def field_from_occupancy(path: str, at_xyz: np.ndarray, capped: bool) -> tuple[n
     header, indices, values = occupancy_view.read_blocks(path)
     voxel = float(header["voxel_size_m"])
     area = occupancy_field.area_around(at_xyz, (CROP_CELLS,) * 3, voxel)
-    field = occupancy_field.build_field(area, indices, values, None, None, None, float(at_xyz[2]), np.zeros((0, 4)),
+    field = occupancy_field.build_field(area, indices, values, None, None, None, float(at_xyz[2]),
                                         occupancy_field.CAP_M if capped else None)  # fmt: skip
     return field.values, field.unknown, field.origin_m, voxel, field.note
 
@@ -338,8 +340,116 @@ def _robot_note(state: dict, height: float, floor_z: float | None) -> str:
     return note
 
 
+def tcp_pose(urdf_path: str, joints_deg: list[float]) -> list[float]:
+    """The TCP pose of the planner's model at some joints, as the brain's pose command takes it.
+
+    urdf_path: The whole-Billie URDF (root = the arm base). joints_deg: (6,) degrees.
+    Returns: [x, y, z mm, rx, ry, rz rotation vector rad] in the arm base frame.
+    """
+    import yourdfpy
+    from scipy.spatial.transform import Rotation
+
+    urdf = yourdfpy.URDF.load(urdf_path)
+    urdf.update_cfg(np.deg2rad(np.asarray(joints_deg, dtype=float))[: len(urdf.actuated_joint_names)])
+    transform = urdf.get_transform("link_tcp")
+    return [*(transform[:3, 3] * 1000.0).tolist(), *Rotation.from_matrix(transform[:3, :3]).as_rotvec().tolist()]
+
+
+def vectors(state: dict | None, urdf_path: str | None) -> dict:
+    """The robot's pose, joints and base as copyable vectors (the brain's command formats).
+
+    state: robot.json, or None. urdf_path: The whole-Billie URDF for a model pose when the robot's is missing.
+    Returns: {"pose": "pose:[...]", "pose_from": "the arm" or the model, "joints": "joints:[...]",
+        "base": "base:[x_m, y_m, theta_rad]"}; empty without a robot state.
+    """
+    if state is None:
+        return {}
+    pose, source = state.get("pose6"), "the arm"
+    if not pose and urdf_path:
+        pose, source = tcp_pose(urdf_path, state["joints_deg"]), "the planner's model; this mapper sends no TCP pose yet"
+    base = state["base"]
+    out = {"joints": "joints:" + json.dumps([round(v, 2) for v in state["joints_deg"]]),
+           "base": "base:" + json.dumps([round(base["x_m"], 3), round(base["y_m"], 3), round(base["theta_rad"], 4)])}  # fmt: skip
+    if pose:
+        out["pose"] = "pose:" + json.dumps([round(v, 1) for v in pose[:3]] + [round(v, 4) for v in pose[3:]])
+        out["pose_from"] = source
+    return out
+
+
+def build_entry(path: str, folder: str, args: argparse.Namespace) -> tuple[go.Figure, dict]:
+    """The views of one snapshot: the 3D figure, the slices page (written in folder) and what they show.
+
+    path: The occupancy.bin.gz (or .esdfbin with --esdf). folder: Where its robot.json is and the slices go.
+    args: The command line (--at, --height, --on-floor, --uncapped, --esdf).
+    Returns: (the 3D figure, info: {"note", "robot_line", "frames", and the vectors()}).
+    """
+    state = None
+    state_path = os.path.join(folder, "robot.json")
+    if os.path.exists(state_path) and not args.esdf:
+        with open(state_path) as f:
+            state = json.load(f)
+    at, map_from_arm, height = _arm_position(args, folder, state)
+    if args.esdf:
+        values, unknown, origin, voxel, note = field_from_esdf(path, at)
+        frames = None
+    else:
+        values, unknown, origin, voxel, note = field_from_occupancy(path, at, not args.uncapped)
+        frames = occupancy_view.read_blocks(path)[0].get("frames_integrated")
+    extra, robot_line, urdf_path = [], "Billie not drawn (no robot.json: the mapper on this robot does not write it yet)", None
+    if state is not None and map_from_arm is not None:
+        floor_z = floor_near(values, origin, voxel, np.array([state["base"]["x_m"], state["base"]["y_m"]]))
+        if args.on_floor and floor_z is not None:
+            map_from_arm, height = arm_in_map(state, height + floor_z)
+        urdf_path, arm = billie_urdf(state.get("xarm_sn"))
+        extra = billie_traces(urdf_path, state["joints_deg"], map_from_arm)
+        robot_line = f"Billie ({arm}); " + _robot_note(state, height, floor_z)
+    name = os.path.basename(folder)
+    figure = figure_3d(values, unknown, origin, voxel, at, f"{name}: the room field in 3D")
+    figure.add_traces(extra)
+    figure.update_layout(uirevision="keep")  # switching maps keeps the view
+    axes = [origin[a] + np.arange(values.shape[a]) * voxel for a in range(3)]
+    top_cm = 20.0 if not args.uncapped else 50.0
+    with open(os.path.join(folder, "esdf_slices.html"), "w") as f:
+        f.write(f"<html><head><meta charset='utf-8'><title>{name} room field</title></head><body>"
+                f"<p>{note}. Black: occupied. Grey: never observed (the planner counts it as free).</p>")  # fmt: skip
+        for normal, kind in ((2, "horizontal"), (1, "vertical x-z")):
+            fig = slices_figure(values, unknown, axes, at, normal, f"{name}: {kind} slices", top_cm)
+            f.write(fig.to_html(full_html=False, include_plotlyjs="cdn" if normal == 2 else False))
+        f.write("</body></html>")
+    info = {"note": note, "robot_line": robot_line, "frames": frames, **vectors(state, urdf_path)}
+    print(f"arm base at {np.round(at, 2).tolist()}: {note}\n{robot_line}")
+    return figure, info
+
+
+def info_html(info: dict) -> str:
+    """The info block of a map: its notes, and its pose / joints / base vectors with copy buttons. Returns: HTML."""
+    rows = []
+    for key in ("pose", "joints", "base"):
+        if info.get(key):
+            source = f" <small>(from {info['pose_from']})</small>" if key == "pose" and info.get("pose_from") else ""
+            rows.append(f"<div class='vec'><code>{html.escape(info[key])}</code>{source} "
+                        f"<button onclick='copyText({json.dumps(info[key])}, this)'>Copy</button></div>")  # fmt: skip
+    return (f"<div class='info'>{''.join(rows)}<div class='note'>{html.escape(info['note'])}</div>"
+            f"<div class='note'>{html.escape(info['robot_line'])}</div></div>")  # fmt: skip
+
+
+# The page script and style shared by the static page and the server's (copy buttons, layout).
+PAGE_HEAD = """<meta charset='utf-8'><style>
+body { font-family: system-ui, sans-serif; margin: 8px; }
+.vec { margin: 3px 0; } .vec code { background: #f2f2f2; padding: 2px 4px; font-size: 13px; }
+.note { color: #555; font-size: 12px; margin-top: 3px; } button { cursor: pointer; }
+</style><script>
+function copyText(text, button) {
+  const done = () => { const old = button.textContent; button.textContent = "Copied"; setTimeout(() => button.textContent = old, 1200); };
+  if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done); return; }
+  const area = document.createElement("textarea"); area.value = text; document.body.appendChild(area);
+  area.select(); document.execCommand("copy"); area.remove(); done();
+}
+</script>"""
+
+
 def main() -> None:
-    """Command line: build or cut the crop, print what it holds, write the page and open it."""
+    """Command line: --host serves the page with Update and the history (esdf_server); otherwise one static page."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--host", help="robot ssh destination: its live occupancy, e.g. bellboy@billie-07.bellboy")
@@ -350,49 +460,26 @@ def main() -> None:
                         help="arm base height above the floor (m); default: the robot's setting (robot.json)")
     parser.add_argument("--on-floor", action="store_true", help="draw Billie standing on the map's measured floor")
     parser.add_argument("--uncapped", action="store_true", help="distances without the planner's 20cm cap")
+    parser.add_argument("--static", action="store_true", help="with --host: one static page instead of the server")
+    parser.add_argument("--port", type=int, default=8765, help="the server's local port (--host)")
     args = parser.parse_args()
+    if args.host and not args.static:
+        from Simulation.world_sim import esdf_server
+
+        esdf_server.serve(args)
+        return
     if args.host:
         folder = os.path.join(robot._REPO, "output", "world_sim", "occupancy", robot.robot_name(args.host))
         path, _ = occupancy_view.fetch(args.host, folder)
     else:
         path = args.file or args.esdf
         folder = os.path.dirname(os.path.abspath(path))
-    state_path = os.path.join(folder, "robot.json")
-    state = None
-    if os.path.exists(state_path) and not args.esdf:
-        with open(state_path) as f:
-            state = json.load(f)
-    at, map_from_arm, height = _arm_position(args, folder, state)
-    if args.esdf:
-        values, unknown, origin, voxel, note = field_from_esdf(path, at)
-    else:
-        values, unknown, origin, voxel, note = field_from_occupancy(path, at, not args.uncapped)
-    extra, robot_line = [], "Billie not drawn (no robot.json: the mapper on this robot does not write it yet)"
-    if state is not None and map_from_arm is not None:
-        floor_z = floor_near(values, origin, voxel, np.array([state["base"]["x_m"], state["base"]["y_m"]]))
-        if args.on_floor and floor_z is not None:
-            map_from_arm, height = arm_in_map(state, height + floor_z)
-        urdf_path, arm = billie_urdf(state.get("xarm_sn"))
-        extra = billie_traces(urdf_path, state["joints_deg"], map_from_arm)
-        robot_line = f"Billie ({arm}) at joints {np.round(state['joints_deg'], 1).tolist()}; " + _robot_note(state, height, floor_z)
-    print(f"arm base at {np.round(at, 2).tolist()}: {note}\n{robot_line}")
-    axes = [origin[a] + np.arange(values.shape[a]) * voxel for a in range(3)]
-    top_cm = 20.0 if not args.uncapped else 50.0
-    name = os.path.basename(folder)
+    figure, info = build_entry(path, folder, args)
     page = os.path.join(folder, "esdf_3d.html")
-    figure = figure_3d(values, unknown, origin, voxel, at, f"{name}: the room field in 3D. {note}<br>{robot_line}")
-    figure.add_traces(extra)
-    figure.write_html(page, include_plotlyjs="cdn")
-    slices = os.path.join(folder, "esdf_slices.html")
-    with open(slices, "w") as f:
-        f.write(f"<html><head><meta charset='utf-8'><title>{name} room field</title></head><body>"
-                f"<p>{note}. Black: occupied. Grey: never observed (the planner counts it as free).</p>")  # fmt: skip
-        for normal, kind in ((2, "horizontal"), (1, "vertical x-z")):
-            fig = slices_figure(values, unknown, axes, at, normal, f"{name}: {kind} slices", top_cm)
-            f.write(fig.to_html(full_html=False, include_plotlyjs="cdn" if normal == 2 else False))
-        f.write("</body></html>")
-    print(f"Wrote {slices}")
-    print(f"Wrote {page}")
+    with open(page, "w") as f:
+        f.write(f"<html><head><title>{os.path.basename(folder)} room field</title>{PAGE_HEAD}</head><body>"
+                f"{info_html(info)}{figure.to_html(full_html=False, include_plotlyjs='cdn')}</body></html>")  # fmt: skip
+    print(f"Wrote {page} and esdf_slices.html")
     webbrowser.open(f"file://{page}")
 
 

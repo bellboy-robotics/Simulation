@@ -242,10 +242,17 @@ floor, `--zmax` hides what is higher.
 ### The planner's room field
 
 ```bash
-python -m Simulation.world_sim.esdf_view --host bellboy@billie-07.bellboy        # the robot's live occupancy
+python -m Simulation.world_sim.esdf_view --host bellboy@billie-07.bellboy        # a local page: Update + history
 python -m Simulation.world_sim.esdf_view --file <occupancy.bin.gz> --at x,y
 python -m Simulation.world_sim.esdf_view --esdf <esdf_grid.esdfbin> --at x,y      # a baked map
 ```
+
+With `--host` it serves a local page (http://127.0.0.1:8765/, `--port`) with an **Update** button: each update
+fetches the robot's live occupancy and `robot.json` (read only) and is kept in
+`output/world_sim/occupancy/<robot>/history/<time>/`. The page lists the updates, newest first, each with
+`pose:[x, y, z mm, rx, ry, rz rad]` (the TCP as the brain's `pose` command takes it; from the arm's own reading,
+or the planner's model when the mapper does not send it), `joints:[...]` and `base:[x, y, theta]`, each with a Copy
+button; clicking one shows its 3D map, and "slices" opens its slice page. `--static` writes the files instead.
 
 Builds the crop around the arm base the way spatial_awareness does for the planner (occupancy_field.build_field:
 2.5cm, holes filled, box rule capped at 20cm; Billie's base not cleared, no AutoXing walls), or cuts a baked map's
