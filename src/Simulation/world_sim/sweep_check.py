@@ -7,7 +7,9 @@ configuration that is valid by construction (scenario["sweep"]["goal_joints_deg"
   (oracle.py) finds a valid joint path from the command's start to its goal;
 - "no_path_found": a command failed and the oracle found no path either: probably no solution
   (kept separately, so they do not hide the misses);
-- "end_state_invalid": the planner left the arm in self-collision, in an obstacle or below the floor.
+- "end_state_invalid": the planner left the arm in self-collision, in an obstacle or below the floor;
+- "tool_speed": a single move (detour frames included) drives the tool faster than TOOL_SPEED_LIMIT_MM_S
+  at the speed the brain queues it (the xArm stops with error 60).
 Not judged: "goal_invalid" (the goal breaks a constraint on this arm) and "untestable_start" (the
 command started from an invalid state, see end_state_invalid of the command before).
 Problem 2, time on the robot:
@@ -26,6 +28,7 @@ import re
 import time
 
 import numpy as np
+from billie_utils import arm_speed
 from billie_utils.messages.pyroki_node import BATCH_SIZE
 
 from Simulation.world_sim.oracle import Oracle
@@ -33,6 +36,7 @@ from Simulation.world_sim.plan import _to_jsonable, run_scenario, save_results
 from Simulation.world_sim.planner import SimPlanner
 from Simulation.world_sim.recording import BRAIN_TICK_RATE
 from Simulation.world_sim.world import scenario_from_data
+from Simulation.world_sim.esdf_runner import gpu_memory
 
 # [mm, deg] How close a pose command must get to a reachable target (the planner usually gets < 1mm).
 POSE_TOL = (5.0, 3.0)
@@ -44,6 +48,11 @@ REPLAY_BATCH_BUDGET_S = BATCH_SIZE / BRAIN_TICK_RATE
 SLOW_REPLAY_START_S = 2.0
 # [s] JAX compile time inside one command: tiny shape-specific kernels are normal, whole solvers are not.
 RECOMPILE_S = 0.5
+# [mm/s] xarm_writer's MAX_ALLOWED_LINEAR_SPEED: its split guard's limit, and below the controller's servo_j
+# linear limit (error 60 tripped at about 1400mm/s on billie-17).
+TOOL_SPEED_LIMIT_MM_S = 1000.0
+# Arm targets a replay plays at the recording's rate, not at a joint speed; their speed is not judged here.
+_REPLAY_KINDS = ("replay", "reroute")
 _COMPILE_LINE = re.compile(r"Finished XLA compilation of (.+) in ([0-9.eE+-]+) sec")
 
 
@@ -94,7 +103,7 @@ def _timing_flags(cmd: str, calls: list[dict], compile_s: float) -> tuple[list[s
     """
     planner_s = sum(t["seconds"] for t in calls)
     batches = [t["seconds"] for t in calls if t["call"] == "batch_solve"]
-    before = sum(t["seconds"] for t in calls if t["call"] in ("detour", "transit"))
+    before = sum(t["seconds"] for t in calls if t["call"] in ("detour", "transit", "plan_move", "plan_replay"))
     flags = []
     if cmd in ("joints", "pose") and planner_s > SLOW_SINGLE_MOVE_S:
         flags.append("slow_single_move")
@@ -107,6 +116,27 @@ def _timing_flags(cmd: str, calls: list[dict], compile_s: float) -> tuple[list[s
     stats = {"planner_s": planner_s, "max_batch_s": max(batches) if batches else None,
              "before_motion_s": before, "compile_s": compile_s}  # fmt: skip
     return flags, stats
+
+
+def _tool_speed(planner: SimPlanner, points: list[dict], start: np.ndarray, command: int) -> float:
+    """The fastest the tool moves in one command's single moves, at the speeds they were queued at.
+
+    planner: For the arm model. points: run_scenario's arm targets. start: (6,) joints before the command.
+    command: The command's index.
+    Returns: The peak tool speed, mm/s; 0 if the command queued no single move.
+    """
+    peak, previous = 0.0, start
+    for point in points:
+        if point["command"] != command:
+            continue
+        target = np.asarray(point["joints_deg"], dtype=np.float64)
+        if point["kind"] not in _REPLAY_KINDS:
+            speed = arm_speed.tool_mm_per_joint_deg(planner.model, previous, target) * point["speed_deg_s"]
+            if point["subdivide"] and speed > TOOL_SPEED_LIMIT_MM_S:
+                speed /= 2.0  # xarm_writer adds a midpoint to a step that is too fast
+            peak = max(peak, speed)
+        previous = target
+    return peak
 
 
 def _solution_flags(
@@ -174,6 +204,9 @@ def check_scenario(planner: SimPlanner, log: CompileLog, data: dict, index: int,
         goal = None if goals[c] is None else np.asarray(goals[c], dtype=np.float64)
         seed = seeds[c] if seeds else index * 100 + c
         solution_flags, solution = _solution_flags(planner, oracle, spec, outcome, starts[c], ends[c], goal, seed)
+        solution["tool_speed_mm_s"] = round(_tool_speed(planner, results["points"], starts[c], c))
+        if solution["tool_speed_mm_s"] > TOOL_SPEED_LIMIT_MM_S:
+            solution_flags.append("tool_speed")
         rows.append({"command": c, "cmd": spec["cmd"], "ok": outcome["ok"], "error": outcome["error"],
                      "flags": solution_flags + timing_flags, "timing": timing, "solution": solution, "seed": seed,
                      "start_joints_deg": starts[c], "end_joints_deg": ends[c]})  # fmt: skip
@@ -236,6 +269,7 @@ def run_sweep(folder: str) -> None:
     from Simulation.world_sim.commands import DETOUR_PLANNER  # noqa: PLC0415
 
     summary = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "build": [t for t in planner.timings if t["call"].startswith("build_")], "rows": [],
+               "build_memory": gpu_memory(),
                "detour_planner": DETOUR_PLANNER, "finished": False}  # fmt: skip
     for index, name in enumerate(names):
         with open(os.path.join(folder, "scenarios", name)) as f:
@@ -243,6 +277,7 @@ def run_sweep(folder: str) -> None:
         rows = check_scenario(planner, log, data, index)
         results = rows[0].pop("results")
         results["name"] = data.get("name", name)
+        results["memory"] = gpu_memory()  # same counters as the ESDF planner's run (esdf_runner)
         save_results(results, os.path.join(folder, "results", name))
         for row in rows:
             row["scenario"] = name
@@ -255,7 +290,7 @@ def run_sweep(folder: str) -> None:
             summary["rows"].append(_to_jsonable({k: v for k, v in row.items() if k != "solution"} |
                                                 {"oracle": row["solution"]["oracle"], "pose_error": row["solution"]["pose_error"],
                                                  "goal_broken": row["solution"]["goal_broken"], "end_broken": row["solution"]["end_broken"],
-        "at_limits": row["solution"]["at_limits"],
+                                                 "tool_speed_mm_s": row["solution"]["tool_speed_mm_s"],
                                                  "at_limits": row["solution"]["at_limits"]}))  # fmt: skip
         summary["elapsed_s"] = time.time() - t0
         with open(os.path.join(folder, "sweep.json"), "w") as f:

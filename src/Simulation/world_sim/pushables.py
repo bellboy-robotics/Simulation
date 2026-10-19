@@ -14,7 +14,7 @@ link cannot jump through a door between two samples.
 from dataclasses import dataclass
 
 import numpy as np
-from billie_utils.world_collision_check_poc import CollisionModel, link_obstacle_distances
+from billie_utils.arm_collision_model import CollisionModel, link_obstacle_distances
 from scipy.spatial.transform import Rotation
 
 from Simulation.world_sim.analysis import SAMPLE_STEP_DEG

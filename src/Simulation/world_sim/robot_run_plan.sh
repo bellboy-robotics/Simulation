@@ -15,10 +15,14 @@ while IFS= read -r -d '' kv; do
     export "$kv"
 done <"/proc/$PID/environ"
 
-# A robot with no physical arm (no URDF, e.g. billie-29) gets the copy robot.py synced from a developer env;
-# all xArm6 URDFs share one structure (only calibration differs), so planner timing is unaffected.
-if [ ! -f "$BILLIE_ENVDIR/urdf/$XARM_SN.urdf" ] && [ -f "$DIR/env/urdf/$XARM_SN.urdf" ]; then
-    echo "No $XARM_SN.urdf in $BILLIE_ENVDIR/urdf; using the synced copy in $DIR/env/urdf" >&2
+# A robot with no physical arm (no URDF, e.g. billie-29, billie-60) gets the copy robot.py synced from a developer
+# env (robot.FALLBACK_ARM_SN); all xArm6 URDFs share one structure (only calibration differs), so timing is unaffected.
+if [ ! -f "$BILLIE_ENVDIR/urdf/${XARM_SN:-}.urdf" ] && compgen -G "$DIR/env/urdf/*.urdf" >/dev/null; then
+    if [ ! -f "$DIR/env/urdf/${XARM_SN:-}.urdf" ]; then
+        XARM_SN=$(basename "$(ls "$DIR"/env/urdf/*.urdf | head -1)" .urdf)
+        export XARM_SN
+    fi
+    echo "No arm URDF in $BILLIE_ENVDIR/urdf; using the synced copy $DIR/env/urdf/$XARM_SN.urdf" >&2
     export BILLIE_ENVDIR="$DIR/env"
     # robot.py syncs the gripper mesh with this copy; without it the planner would use its gripper box.
     if [ ! -f "$BILLIE_ENVDIR/urdf/meshes/ee-rome-v0-lod.stl" ]; then
@@ -32,6 +36,14 @@ fi
 
 # The synced code wins over the image's /app code (the image may lack the world-collision POC).
 export PYTHONPATH="$DIR/src:$DIR/billie/nodes/pyroki-planner:$DIR/billie/billie-utils:$DIR/pyroki/src"
+# Pure-Python wheels the image may lack (robot.py syncs them), imported straight from the zip.
+for wheel in "$DIR"/wheels/*.whl; do
+    [ -f "$wheel" ] && PYTHONPATH="$PYTHONPATH:$wheel"
+done
+# WORLD_SIM_ESDF_MAP (docker exec -e): the planner is built for that map's voxel (pyroki_planner esdf_world).
+if [ -n "${WORLD_SIM_ESDF_MAP:-}" ]; then
+    export PYROKI_ESDF_MAP="$WORLD_SIM_ESDF_MAP"
+fi
 # Own JAX cache, so the robot's planner cache is never touched.
 export PYROKI_JAX_CACHE_DIR="$DIR/jax-cache"
 export WORLD_SIM_RECORDINGS="$DIR/recordings"

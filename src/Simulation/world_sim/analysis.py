@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 
 import numpy as np
-from billie_utils.world_collision_check_poc import (
+from billie_utils.arm_collision_model import (
     CollisionModel,
     link_obstacle_distances,
     link_transforms,
@@ -163,6 +163,78 @@ def tcp_poses(run: Run, joints_deg: np.ndarray) -> np.ndarray:
     """
     T = link_transforms(run.model, np.deg2rad(joints_deg))[:, run.model.link_names.index("link_tcp")]
     return np.concatenate([T[:, :3, 3] * 1000.0, Rotation.from_matrix(T[:, :3, :3]).as_rotvec()], axis=1)
+
+
+# [mm, deg] A target the arm ends farther from than this was not reached (the IK's own accuracy is ~1mm).
+TARGET_TOLERANCE_MM, TARGET_TOLERANCE_DEG = 5.0, 2.0
+# [mm] replay_policy's default final_position_threshold (commands.FINAL_POSITION_THRESHOLD_M): the robot
+# fails a pose replay whose last frame ends farther than this; closer misses pass silently.
+REPLAY_FINAL_THRESHOLD_MM = 50.0
+# The sim's own note when a pose target is inside the robot base (the robot keeps the joints silently).
+BASE_COLLISION_NOTE = "inside the robot base"
+
+
+def target_errors(run: Run) -> tuple[np.ndarray, np.ndarray]:
+    """How far each target's reached TCP is from the pose the planner was asked for.
+
+    run: The run.
+    Returns: ((N,) position error mm, (N,) orientation error deg); NaN for targets without a pose.
+    """
+    n = len(run.joints_deg)
+    reached = tcp_poses(run, run.joints_deg) if n else np.zeros((0, 6))
+    pos = np.linalg.norm(reached[:, :3] - run.target_pose[:, :3], axis=1)
+    has_target = ~np.isnan(run.target_pose[:, 0])
+    ori = np.full(n, np.nan)
+    if has_target.any():
+        delta = Rotation.from_rotvec(run.target_pose[has_target, 3:]).inv() * Rotation.from_rotvec(reached[has_target, 3:])
+        ori[has_target] = np.rad2deg(delta.magnitude())
+    return pos, ori
+
+
+def target_checks(run: Run, pos_err_mm: np.ndarray, ori_err_deg: np.ndarray) -> list[dict]:
+    """Per command: did the arm reach its targets, and would Billie have said so if it did not.
+
+    On the robot nothing checks a pose's IK result or the replay frames on the way; only a pose replay's
+    last frame is checked (REPLAY_FINAL_THRESHOLD_MM). A command that finished with a miss beyond the
+    tolerance was therefore reported as a success: a "silent miss".
+
+    run: The run. pos_err_mm, ori_err_deg: (N,) per target, distance of the reached TCP from its target
+        (NaN without a target; report.point_metrics' "pos_err_mm" / "ori_err_deg").
+    Returns: Per run command {"verdict": "reached" | "failed" | "silent miss" | "stayed put" (pose inside
+        the base) | "not checked" (no pose targets: joints, replay in joints mode), "checked" / "missed":
+        targets checked / beyond tolerance, "worst_mm", "worst_deg", "worst_target", "final_mm", "final_deg"
+        (the command's last checked target), "text": one line for people}.
+    """
+    out = []
+    for c, outcome in enumerate(run.commands):
+        spec = outcome["spec"]
+        kinds = ("pose",) if spec["cmd"] == "pose" else ("replay",) if spec.get("transform", "poses") == "poses" else ()
+        idx = np.flatnonzero((run.command == c) & np.isin(run.kind, kinds) & ~np.isnan(pos_err_mm))
+        pos, ori = pos_err_mm[idx], np.nan_to_num(ori_err_deg[idx])
+        missed = (pos > TARGET_TOLERANCE_MM) | (ori > TARGET_TOLERANCE_DEG)
+        row = {"checked": len(idx), "missed": int(missed.sum()), "worst_mm": None, "worst_deg": None, "worst_target": None,
+               "final_mm": None, "final_deg": None}  # fmt: skip
+        if len(idx):
+            w = int(np.argmax(pos + ori))  # a combined score only to pick the worst one
+            row.update(worst_mm=round(float(pos[w]), 1), worst_deg=round(float(ori[w]), 1), worst_target=int(idx[w]),
+                       final_mm=round(float(pos[-1]), 1), final_deg=round(float(ori[-1]), 1))  # fmt: skip
+        stayed = any(e["command"] == c and BASE_COLLISION_NOTE in e["message"] for e in run.events)
+        if not outcome["ok"]:
+            row["verdict"], row["text"] = "failed", f"failed (reported): {outcome['error']}"
+        elif stayed:
+            row["verdict"], row["text"] = "stayed put", "finished, but the target is inside the robot base: the arm stayed where it was (Billie reports success)"
+        elif not len(idx):
+            row["verdict"], row["text"] = "not checked", "finished (no pose target to check)"
+        elif row["missed"]:
+            row["verdict"] = "silent miss"
+            where = (f"{row['missed']} of {row['checked']} frames off target, worst {row['worst_mm']} mm / {row['worst_deg']}° "
+                     f"at target {row['worst_target']}, last frame {row['final_mm']} mm" if spec["cmd"] != "pose"
+                     else f"{row['final_mm']} mm / {row['final_deg']}° from its target")  # fmt: skip
+            row["text"] = f"finished, but missed: {where} — Billie reports success"
+        else:
+            row["verdict"], row["text"] = "reached", f"reached (within {TARGET_TOLERANCE_MM:.0f} mm / {TARGET_TOLERANCE_DEG:.0f}°)"
+        out.append(row)
+    return out
 
 
 def eef_mask(run: Run) -> np.ndarray:

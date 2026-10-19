@@ -15,12 +15,12 @@ import socket
 import traceback
 
 import numpy as np
-from billie_utils import arm_motion_guard_poc
+from billie_utils import arm_motion_guard
 
 from Simulation.world_sim.commands import SimBrain, run_command
 from Simulation.world_sim.planner import SimPlanner, gripper_geometry
 from Simulation.world_sim.sim_arm import SimArm
-from Simulation.world_sim.world import World, load_scenario
+from Simulation.world_sim.world import World, load_scenario, scenario_from_data
 
 # Imported after the planner modules: the resolver picks the JAX platform (cpu/cuda) at its import.
 from jax import devices as jax_devices  # noqa: E402
@@ -48,7 +48,8 @@ def run_scenario(
         lines, cloud messages and JAX compile totals during this run (planner_log, planner_messages, planner_compile).
     """
     reused = planner.runs_started > 0  # an earlier run already reported (and waited for) the build
-    planner.set_obstacles(*world.capsules("avoid"))
+    planner.set_obstacles(*world.capsules("avoid"), floor_z_m=world.floor_z_m)  # set_obstacles' default: floor on
+    planner.set_room(world.room, -world.floor_z_m)
     first_timing = len(planner.timings)
     arm = SimArm(start_joints_deg, continue_on_block=continue_on_block)
     brain = SimBrain(planner, arm)
@@ -60,7 +61,7 @@ def run_scenario(
             error = None
             try:
                 run_command(brain, spec)
-            except (arm_motion_guard_poc.ArmMoveBlockedError, RuntimeError, ValueError) as e:
+            except (arm_motion_guard.ArmMoveBlockedError, RuntimeError, ValueError) as e:
                 error = str(e)
                 brain.log(f"{spec['cmd']} failed: {e}", "ERROR")
                 logging.debug(traceback.format_exc())
@@ -134,6 +135,25 @@ def run_without_obstacles(
         **{k: bare[k] for k in ("started_at", "planner_log", "planner_log_dropped", "planner_messages",
                                 "planner_compile")},  # fmt: skip
     }
+
+
+def plan_scenario(planner: SimPlanner, data: dict, flags: dict, name: str = "scenario") -> dict:
+    """Plans a scenario given as JSON, like the command line (the editor and the robot worker use it).
+
+    planner: The planner (reused across scenarios).
+    data: The scenario JSON (see world.scenario_from_data).
+    flags: {"keep_going", "continue_on_block", "compare_no_obstacles"}: the command line's flags, bools.
+    name: Fallback scenario name.
+    Returns: run_scenario's results plus "name", and "no_obstacles" when compared.
+    """
+    scenario = scenario_from_data(data, name)
+    args = (planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"])
+    options = {"continue_on_block": bool(flags.get("continue_on_block")), "stop_on_error": not flags.get("keep_going")}
+    results = run_scenario(*args, **options)
+    if flags.get("compare_no_obstacles"):
+        results["no_obstacles"] = run_without_obstacles(*args, **options)
+    results["name"] = scenario["name"]
+    return results
 
 
 def _to_jsonable(value):

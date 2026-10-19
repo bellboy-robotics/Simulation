@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field
 
 import numpy as np
-from billie_utils.messages.pyroki_world_poc import (
+from billie_utils.messages.pyroki_world import (
     DEFAULT_ARM_BASE_HEIGHT_M,
     MAX_WORLD_CAPSULES,
     tabletop_capsules,
@@ -52,6 +52,9 @@ class World:
     objects: list[WorldObject] = field(default_factory=list)
     # [m] Arm-frame z of the floor (minus the arm base height above it).
     floor_z_m: float = -DEFAULT_ARM_BASE_HEIGHT_M
+    # The room map, if the scenario names one: {"map": path to the mapper's .esdfbin (relative to the repo
+    # root), "billie": the scenario's billie pose (see object_in_arm_frame)}; None without a map.
+    room: dict | None = None
 
     def add(self, spec: dict) -> WorldObject:
         """Converts an object description into capsules and adds it to the world.
@@ -237,7 +240,7 @@ def object_in_arm_frame(spec: dict, billie: dict | None, arm_base_height_m: floa
     if billie is None:
         raise ValueError(f"Object {spec.get('name')!r} is in the map frame; the scenario needs a 'billie' pose")
     # Imported here so arm-frame scenarios still run on a robot checkout older than the map helpers.
-    from billie_utils.messages.pyroki_world_poc import map_to_arm_frame
+    from billie_utils.messages.pyroki_world import map_to_arm_frame
 
     x_mm, y_mm, yaw_deg = billie["pose"]
     robot_pose = (x_mm / 1000.0, y_mm / 1000.0, np.deg2rad(yaw_deg))
@@ -279,15 +282,21 @@ def scenario_from_data(data: dict, name: str) -> dict:
 
     data: Parsed scenario: "objects" (see object_capsules, arm or map frame), "start_joints_deg"
         (6 values), "commands" (see Simulation.world_sim.commands.run_command), optionally
-        "floor_z_mm" and "billie" (see object_in_arm_frame).
+        "floor_z_mm", "billie" (see object_in_arm_frame) and "map" (the mapper's .esdfbin the planner
+        plans against, path relative to the repo root; needs "billie").
     name: Fallback name when data has none.
     Returns: {"world": World, "start_joints_deg": (6,) array, "commands": list of dicts, "name": str}.
     """
     floor_z_m = data.get("floor_z_mm", -DEFAULT_ARM_BASE_HEIGHT_M * 1000.0) / 1000.0
     specs = [object_in_arm_frame(spec, data.get("billie"), -floor_z_m) for spec in data.get("objects", [])]
+    world = World.from_specs(specs, floor_z_m)
+    if data.get("map"):
+        if data.get("billie") is None:
+            raise ValueError("A scenario with a map needs a 'billie' pose")
+        world.room = {"map": data["map"], "billie": data["billie"]}
     return {
         "name": data.get("name", name),
-        "world": World.from_specs(specs, floor_z_m),
+        "world": world,
         "start_joints_deg": np.asarray(data["start_joints_deg"], dtype=np.float64),
         "commands": data.get("commands", []),
     }

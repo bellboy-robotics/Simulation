@@ -1,6 +1,6 @@
 """Runs the plan step on a robot, to measure planning times on its Jetson GPU.
 
-    python -m Simulation.world_sim.robot src/Simulation/world_sim/scenarios/*.json [--host bellboy@billie-29.bellboy]
+    python -m Simulation.world_sim.robot src/Simulation/world_sim/scenarios/*.json [--host bellboy@billie-12.bellboy]
 
 1. sync: copies the billie-onboard planner code into a folder the robot's `billie` container sees.
    The code comes from the robot's own billie-onboard checkout (--robot-checkout, default
@@ -17,6 +17,7 @@ import glob
 import json
 import os
 import subprocess
+import sys
 from typing import Callable
 
 from Simulation.world_sim.recording import RECORDINGS_DIR, export_recording
@@ -24,10 +25,12 @@ from Simulation.world_sim.recording import RECORDINGS_DIR, export_recording
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 # On the robot host; mounted at the same path in the billie container.
 ROBOT_DIR = "/home/bellboy/billie/world_sim"
-# The robot the timings are measured on (Jetson Orin GPU).
-DEFAULT_HOST = "bellboy@billie-29.bellboy"
-# billie-onboard checkout on the robot to take the planner code from ("" = the local billie-onboard).
-DEFAULT_ROBOT_CHECKOUT = "~/users/ronit/billie-onboard"
+# The robot the timings are measured on (Jetson Orin GPU); billie-12 since 2026-10-19 (the user). It has a real arm:
+# the sim only plans and never moves it, and runs need --share-gpu (its live planner holds GPU memory).
+DEFAULT_HOST = "bellboy@billie-12.bellboy"
+# billie-onboard checkout on the robot to take the planner code from; "" = the local billie-onboard
+# submodule (branch arm_planner), which the simulation's code matches.
+DEFAULT_ROBOT_CHECKOUT = ""
 # (path inside a billie-onboard checkout, path under ROBOT_DIR) of the planner code the plan step imports.
 _BILLIE_CODE = [
     ("billie/nodes/pyroki-planner/pyroki_planner", "billie/nodes/pyroki-planner/pyroki_planner"),
@@ -35,9 +38,22 @@ _BILLIE_CODE = [
     ("billie/node_ticks.py", "billie/node_ticks.py"),
     ("billie/vendor/pyroki/src/pyroki", "pyroki/src/pyroki"),
 ]
+# Pure-Python wheels for the synced planner code that a robot's image may lack (flatbuffers, absl-py:
+# jax.export, used by pyroki_planner.exported_solvers), kept locally in WHEELS_DIR. Versions = uv.lock.
+_EXTRA_WHEELS = ("flatbuffers==25.12.19", "absl-py==2.5.0")
+WHEELS_DIR = os.path.join(_REPO, "output", "world_sim", "wheels")
 _RSYNC = ["rsync", "-a", "--delete", "--exclude", "__pycache__", "--exclude", "*.html"]
 # Gripper and camera collision mesh the planner loads from $BILLIE_ENVDIR/urdf/meshes (pyroki_planner/urdf.py).
 _GRIPPER_MESH = "ee-rome-v0-lod.stl"
+# The arm a robot with no physical arm plans with (billie-29's XARM_SN, copied from BILLIE-03/BILLIE-10's env).
+# Every xArm6 URDF has the same links and joints (only calibration differs), so timings don't depend on it.
+FALLBACK_ARM_SN = "XI130502F56A21"
+
+
+def _local_billie_root() -> str:
+    """The local billie-onboard checkout to sync with --robot-checkout "": $WORLD_SIM_BILLIE_ONBOARD (e.g. a
+    worktree of another branch), else the Simulation repo's billie-onboard submodule. Returns: Its path."""
+    return os.path.expanduser(os.environ.get("WORLD_SIM_BILLIE_ONBOARD", os.path.join(_REPO, "billie-onboard")))
 
 
 def _local_billie_path(path: str) -> str:
@@ -48,7 +64,7 @@ def _local_billie_path(path: str) -> str:
     """
     if path.startswith("billie/vendor/pyroki/"):
         return os.path.join(_REPO, path.replace("billie/vendor/", "", 1))
-    return os.path.join(_REPO, "billie-onboard", path)
+    return os.path.join(_local_billie_root(), path)
 
 
 def _dir_slash(path: str, is_dir: bool) -> str:
@@ -81,7 +97,7 @@ def _sh(args: list[str], capture: bool = False, log: Callable[[str], None] | Non
 
 
 def sync(host: str, scenarios: list[str], robot_checkout: str, log: Callable[[str], None] | None = None) -> None:
-    """Copies the planner code, world_sim, the scenarios and their recordings to ROBOT_DIR.
+    """Copies the planner code, world_sim, the scenarios, their recordings and room maps to ROBOT_DIR.
 
     host: ssh destination, e.g. bellboy@billie-29.bellboy.
     scenarios: Local scenario files.
@@ -90,12 +106,16 @@ def sync(host: str, scenarios: list[str], robot_checkout: str, log: Callable[[st
     log: Receives progress and command output lines; None prints them.
     """
     say = log or print
+    maps = set()
     for path in scenarios:
         with open(path) as f:
-            for command in json.load(f).get("commands", []):
-                if command.get("repo_id"):
-                    export_recording(command["repo_id"], RECORDINGS_DIR)
-    local_commit = _sh(["git", "-C", os.path.join(_REPO, "billie-onboard"), "log", "-1", "--format=%h %s"],
+            data = json.load(f)
+        for command in data.get("commands", []):
+            if command.get("repo_id"):
+                export_recording(command["repo_id"], RECORDINGS_DIR)
+        if data.get("map") and not os.path.isabs(data["map"]):
+            maps.add(data["map"])  # the room map the planner plans against, under the repo root
+    local_commit = _sh(["git", "-C", _local_billie_root(), "log", "-1", "--format=%h %s"],
                        capture=True).strip()  # fmt: skip
     local_items = [(os.path.join(_REPO, "src", "Simulation"), "src/Simulation"), (RECORDINGS_DIR, "recordings")]
     local_items += [(p, f"scenarios/{os.path.basename(p)}") for p in scenarios]
@@ -113,23 +133,84 @@ def sync(host: str, scenarios: list[str], robot_checkout: str, log: Callable[[st
         local_items = [(_local_billie_path(src), dst) for src, dst in _BILLIE_CODE] + local_items
     for local, remote in local_items:
         _sh([*_RSYNC, _dir_slash(local, os.path.isdir(local)), f"{host}:{ROBOT_DIR}/{remote}"], log=log)
+    for room_map in sorted(maps):
+        _sync_map(host, room_map, log)
     _sync_arm_urdf(host, say)
+    _sync_wheels(host, say)
+
+
+def _sync_map(host: str, room_map: str, log: Callable[[str], None] | None) -> None:
+    """Copies one room map (.esdfbin) to the same path under ROBOT_DIR; rsync skips it when unchanged.
+
+    host: ssh destination. room_map: The scenario's "map", relative to the repo root.
+    log: Receives command output lines; None prints them.
+    """
+    _sh(["ssh", host, "mkdir", "-p", os.path.dirname(f"{ROBOT_DIR}/{room_map}")])
+    _sh(["rsync", "-a", os.path.join(_REPO, room_map), f"{host}:{ROBOT_DIR}/{room_map}"], log=log)
+
+
+def sync_scenario_data(host: str, scenario: dict, log: Callable[[str], None] | None = None) -> None:
+    """Copies the files a scenario needs besides the code: the recordings it replays and its room map
+    (for a connected robot, whose code is synced already).
+
+    host: ssh destination. scenario: The scenario JSON. log: Receives command output lines; None prints them.
+    """
+    repo_ids = [c["repo_id"] for c in scenario.get("commands", []) if c.get("repo_id")]
+    for repo_id in repo_ids:
+        export_recording(repo_id, RECORDINGS_DIR)
+    if repo_ids:
+        _sh([*_RSYNC, _dir_slash(RECORDINGS_DIR, True), f"{host}:{ROBOT_DIR}/recordings/"], log=log)
+    if scenario.get("map") and not os.path.isabs(scenario["map"]):
+        _sync_map(host, scenario["map"], log)
+
+
+# Marks the planner worker's protocol lines on its stdout (plan_server.py); anything else there is log output.
+WORKER_PREFIX = "@@world_sim@@ "
+
+
+def worker_command(host: str) -> list[str]:
+    """The ssh command that starts the planner worker (plan_server.py) in the robot's billie container.
+
+    It runs like the plan step (robot_run_plan.sh: the live planner's environment, the synced code, its
+    own JAX cache) and reads jobs on stdin, so it ends when this ssh connection closes.
+    host: ssh destination. Returns: The command and its arguments.
+    """
+    return ["ssh", "-T", host, "docker", "exec", "-i", "-e", "WORLD_SIM_MODULE=Simulation.world_sim.plan_server",
+            "billie", "bash", f"{ROBOT_DIR}/src/Simulation/world_sim/robot_run_plan.sh", ROBOT_DIR]  # fmt: skip
+
+
+def _sync_wheels(host: str, say: Callable[[str], None] = print) -> None:
+    """Copies pure-Python wheels the synced planner code needs but the robot's image may not have yet.
+
+    robot_run_plan.sh puts every synced wheel on PYTHONPATH (pure-Python wheels import from the zip).
+    host: ssh destination. say: Receives progress lines.
+    """
+    os.makedirs(WHEELS_DIR, exist_ok=True)
+    for requirement in _EXTRA_WHEELS:
+        name = requirement.split("==")[0]
+        if not glob.glob(os.path.join(WHEELS_DIR, f"{name}-*.whl")):
+            _sh([sys.executable, "-m", "pip", "download", requirement, "--no-deps", "-d", WHEELS_DIR, "-q"])
+    _sh(["ssh", host, "mkdir", "-p", f"{ROBOT_DIR}/wheels"])
+    _sh([*_RSYNC, _dir_slash(WHEELS_DIR, True), f"{host}:{ROBOT_DIR}/wheels/"])
+    say(f"Wheels synced: {', '.join(sorted(os.listdir(WHEELS_DIR)))}")
 
 
 def _sync_arm_urdf(host: str, say: Callable[[str], None] = print) -> None:
-    """Copies the robot arm's URDF (and meshes) from a local developer env, for robots with no physical arm (no URDF, e.g. billie-29).
+    """Copies an arm URDF (and meshes) from a local developer env, for robots with no physical arm (no URDF, e.g. billie-60).
 
     robot_run_plan.sh uses the copy only when the robot's own $BILLIE_ENVDIR/urdf has no URDF for its arm.
 
     host: ssh destination. say: Receives the progress messages.
     """
-    environ = r"""docker exec billie sh -c 'tr "\0" "\n" < /proc/$(pgrep -f bin/pyroki-planner | head -1)/environ'"""
-    env = dict(line.split("=", 1) for line in _sh(["ssh", host, environ], capture=True).splitlines() if "=" in line)
-    sn = env.get("XARM_SN", "")
-    found = sorted(glob.glob(os.path.expanduser(f"~/releases/env/*/urdf/{sn}.urdf"))) if sn else []
-    if not found:
-        say(f"No local URDF for arm {sn or '?'}; the robot's own one must exist")
+    # A robot with its own arm has its URDF in the container's env folder; nothing to copy then.
+    own = _sh(["ssh", host, "docker exec billie sh -c 'ls $BILLIE_ENVDIR/urdf/*.urdf 2>/dev/null || true'"], capture=True)
+    if own.strip():
+        say(f"Arm URDF: the robot's own ({', '.join(os.path.basename(p) for p in own.split())}); no fallback copy")
         return
+    sn = FALLBACK_ARM_SN
+    found = sorted(glob.glob(os.path.expanduser(f"~/releases/env/*/urdf/{sn}.urdf")))
+    if not found:
+        raise FileNotFoundError(f"No local URDF for the fallback arm {sn} under ~/releases/env/*/urdf")
     urdf_dir = os.path.dirname(found[0])
     meshes = f"{ROBOT_DIR}/env/urdf/meshes"
     _sh(["ssh", host, "mkdir", "-p", meshes])

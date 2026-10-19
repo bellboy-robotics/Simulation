@@ -1,0 +1,67 @@
+{
+ "billie": {
+  "pose": [
+   3150.0,
+   -2000.0,
+   -119.221
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "start_joints_deg": [
+  -16.0,
+  -83.9,
+  -144.8,
+  -24.0,
+  -68.3,
+  166.3
+ ],
+ "objects": [],
+ "commands": [
+  {
+   "cmd": "joints",
+   "joints": [
+    136.9,
+    -76.8,
+    -24.5,
+    34.6,
+    35.0,
+    -164.8
+   ]
+  }
+ ],
+ "name": "kitchen_t035_joints_was_collision_now_success",
+ "kitchen": {
+  "base_xy": [
+   3.1500000000000004,
+   -2.0
+  ],
+  "heading_rad": -2.080840016132848,
+  "unseen_share": 0.0010225265701979984,
+  "capsules_in_reach": 25,
+  "map": "4f041b6214cef1db893293e8b8e9d4214103ffe7dc80554327a791e8bd6a37a8",
+  "capsule_set": "B-50",
+  "task": 35,
+  "kind": "joints",
+  "map_file": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+ },
+ "sweep": {
+  "index": 35,
+  "seed": 1,
+  "goal_joints_deg": [
+   [
+    136.9,
+    -76.8,
+    -24.5,
+    34.6,
+    35.0,
+    -164.8
+   ]
+  ]
+ },
+ "map": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+}

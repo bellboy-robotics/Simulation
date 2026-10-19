@@ -8,8 +8,8 @@ reachable. Every draw takes a seed, so a scenario can be drawn again.
 """
 
 import numpy as np
-from billie_utils.messages.pyroki_world_poc import MAX_WORLD_CAPSULES, WORLD_COL_MARGIN_M, planar_transform
-from billie_utils.world_collision_check_poc import CollisionModel, link_obstacle_distances, link_transforms
+from billie_utils.messages.pyroki_world import MAX_WORLD_CAPSULES, WORLD_COL_MARGIN_M, planar_transform
+from billie_utils.arm_collision_model import CollisionModel, link_obstacle_distances, link_transforms
 from scipy.spatial.transform import Rotation
 
 from Simulation.world_sim.world import object_capsules, object_in_arm_frame, scenario_from_data

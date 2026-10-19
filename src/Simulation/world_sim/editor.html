@@ -59,7 +59,12 @@
          border-radius: 8px; padding: 8px 12px; display: none; }
   #hud .row { margin: 0; }
   #hud input[type=range] { width: 100%; margin: 0; }
-  #track { position: relative; flex: 1; padding-top: 16px; }
+  #track { position: relative; flex: 1; padding-top: 16px; padding-bottom: 7px; }
+  /* Bands under the slider where the arm is closer than safe to an avoid object (same thumb inset as the markers). */
+  #bands { position: absolute; left: 8px; right: 8px; bottom: 0; height: 5px; pointer-events: none; }
+  .band { position: absolute; height: 100%; background: #ffa000; min-width: 2px; }
+  .band.inside { background: #ff00ff; }
+  .zone { cursor: pointer; } .zone:hover { text-decoration: underline; }
   #markers { position: absolute; top: 0; left: 0; right: 0; height: 16px; }
   /* A marker sits where the slider thumb (~16px wide) is when that sample is shown. */
   .marker-group { position: absolute; transform: translateX(-50%); display: flex; gap: 1px; }
@@ -124,6 +129,17 @@
         <button id="editStart" title="The sliders set the joints the arm starts the scenario from">Edit init position</button>
         <button id="jumpInit" title="Show the arm at its init position (nothing is changed)">Jump to init position</button>
       </div>
+      <div class="row">
+        <button id="copyJointsCmd" title="A new joints command to the joints on the sliders">Copy → joints command</button>
+        <button id="copyPoseCmd" title="A new pose command to the TCP pose of the sliders">Copy → pose command</button>
+      </div>
+      <div class="form">
+        <div class="small muted">Position → joints: type a TCP pose (or paste one copied from a pose command) and let the
+          planner find the joints. Editing the init position sets them as the init joints.</div>
+        <div id="armPose"></div>
+        <div class="row"><button id="poseFromTcp">= current TCP</button><button id="pastePose">Paste pose</button>
+          <button id="poseToJoints" class="primary">Solve IK → joints</button></div>
+      </div>
     </section>
 
     <section>
@@ -183,7 +199,7 @@
     <div id="hud">
       <div class="row">
         <button id="play">▶</button>
-        <div id="track"><div id="markers"></div><input id="timeline" type="range" min="0" max="0" value="0"></div>
+        <div id="track"><div id="markers"></div><input id="timeline" type="range" min="0" max="0" value="0"><div id="bands"></div></div>
         <select id="speed"><option>0.5</option><option selected>1</option><option>2</option><option>5</option></select>
         <button id="closePlayback">Back to editing</button>
       </div>
@@ -277,9 +293,10 @@ const capsuleGroup = new THREE.Group(); // the planner's link capsules (toggled 
 capsuleGroup.visible = false;
 const armObjects = new THREE.Group();   // objects with frame "arm"
 const mapObjects = new THREE.Group();   // objects with frame "map"
+const roomMap = new THREE.Group();      // the scenario's room map (the planner's ESDF): its surface voxels
 const targets = new THREE.Group();      // pose command targets
 const tcpAxes = new THREE.AxesHelper(0.1);
-scene.add(billieRoot, mapObjects); billieRoot.add(armRoot); armRoot.add(capsuleGroup, armObjects, targets, tcpAxes);
+scene.add(billieRoot, mapObjects, roomMap); billieRoot.add(armRoot); armRoot.add(capsuleGroup, armObjects, targets, tcpAxes);
 billieRoot.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0.005), 0.6, 0x2f6fdf, 0.12, 0.07));
 let pathLine = null;
 
@@ -872,10 +889,15 @@ function renderSliderTarget() {
 let downAt = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || gizmo.dragging || play) return;
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4 || gizmo.dragging) return;
   const rect = renderer.domElement.getBoundingClientRect();
   const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
   const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, camera);
+  if (play) {  // in playback only the zone markers are clickable
+    const zone = ray.intersectObjects(zoneGroup.children, false).find((h) => h.object.userData.pick);
+    if (zone) jumpTo(zone.object.userData.pick.sample);
+    return;
+  }
   const pickOf = (o) => { for (; o; o = o.parent) if (o.userData.pick) return o.userData.pick; return null; };
   const hit = ray.intersectObjects([robot, mapObjects, armObjects, targets].filter(Boolean), true).find((h) => pickOf(h.object));
   if (!hit) { if (!gizmo.axis) select(null); return; }
@@ -890,6 +912,56 @@ function renderBillieForm() {
   box.append(numberRow('x, y, yaw°', scn.billie.pose, (v) => { scn.billie.pose = v; edited(false); refreshArm(); }));
   box.append(numberRow('arm on base', scn.billie.arm_to_base, (v) => { scn.billie.arm_to_base = v; edited(false); refreshArm(); }));
   box.lastChild.title = 'ARM_TO_BASE_CALIBRATION: the arm base in the robot frame [x mm, y mm, yaw°]';
+  box.append(roomMapRow());
+}
+
+// ----- the room map -----------------------------------------------------------------------------
+let showRoomMap = true;
+let roomMapKey = '';  // map path and the Billie position its points were fetched around ('' for none)
+// [m] Billie may move this far before the room map's points are fetched again (they cover 2.5m around it).
+const ROOM_MAP_REFETCH_M = 0.5;
+
+/** The room map field: the scenario's "map" (the mapper's .esdfbin, path from the repo root) and a show box. */
+function roomMapRow() {
+  const row = document.createElement('div'); row.className = 'row';
+  row.title = "The room map the planner plans against (the scenario's \"map\"): the mapper's ESDF, e.g. output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin. Empty for none.";
+  row.innerHTML = '<label>room map</label>';
+  const path = document.createElement('input'); path.type = 'text'; path.className = 'wide'; path.value = scn.map || '';
+  path.placeholder = 'none (.esdfbin path)';
+  path.addEventListener('change', () => {
+    if (path.value.trim()) scn.map = path.value.trim(); else delete scn.map;
+    roomMapKey = ''; edited(false); refreshArm(); drawRoomMap();
+  });
+  const show = document.createElement('input'); show.type = 'checkbox'; show.checked = showRoomMap; show.title = 'show the room map';
+  show.addEventListener('change', () => { showRoomMap = show.checked; roomMap.visible = showRoomMap; drawRoomMap(); });
+  const count = document.createElement('span'); count.id = 'roomMapCount'; count.className = 'small muted';
+  row.append(path, show, count);
+  return row;
+}
+
+/** Draws the room map's surface voxels around Billie (colored by height); fetches them again after a map change or a move. */
+async function drawRoomMap() {
+  roomMap.visible = showRoomMap;
+  if (!scn.map || !showRoomMap) { if (!scn.map) { roomMap.clear(); roomMapKey = ''; } return; }
+  const [x, y] = scn.billie.pose;
+  const prev = roomMapKey ? JSON.parse(roomMapKey) : null;
+  if (prev && prev.map === scn.map && Math.hypot(prev.x - x, prev.y - y) / 1000 < ROOM_MAP_REFETCH_M) return;
+  roomMapKey = JSON.stringify({ map: scn.map, x, y });
+  let reply;
+  try { reply = await api(`/api/map?map=${encodeURIComponent(scn.map)}&x_mm=${x}&y_mm=${y}`); }
+  catch (e) { roomMap.clear(); roomMapKey = ''; const c = $('roomMapCount'); if (c) c.textContent = `map: ${e.message}`; return; }
+  const positions = new Float32Array(reply.points), colors = new Float32Array(positions.length);
+  const color = new THREE.Color();
+  for (let i = 0; i < positions.length; i += 3) {
+    color.setHSL(0.66 * (1 - Math.min(1, Math.max(0, positions[i + 2] / 2.0))), 0.75, 0.5);  // blue low -> red at 2m
+    colors.set([color.r, color.g, color.b], i);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  roomMap.clear();
+  roomMap.add(new THREE.Points(geometry, new THREE.PointsMaterial({ size: reply.voxel_m * 0.8, vertexColors: true, transparent: true, opacity: 0.55 })));
+  const c = $('roomMapCount'); if (c) c.textContent = `${reply.count} surface voxels${reply.count < reply.total ? ` (of ${reply.total})` : ''}`;
 }
 
 // ----- joints sliders ---------------------------------------------------------------------------
@@ -932,9 +1004,19 @@ function describe(c) {
   return `replay_policy ${c.transform || 'poses'} ${(c.repo_id || '').split('/').pop()}`;
 }
 
+/** Whether a run command finished without reaching its target (Billie reports it as done). c: playback command. Returns: bool. */
+function silent(c) { return ['silent miss', 'stayed put'].includes(c.check?.verdict); }
+
+/** A run command's mark: ✓ reached, ✗ failed (reported), red ⚠ finished off target (silent). c: playback command. Returns: HTML. */
+function outcomeMark(c) {
+  if (!c.ok) return '<span class="bad" title="failed: Billie reported it">✗</span>';
+  if (silent(c)) return `<span class="bad" title="${esc(c.check.text)}">⚠</span>`;
+  return '<span class="ok">✓</span>';
+}
+
 /** The command rows, with move up / down. */
 function renderCommandList() {
-  const outcome = (i) => !play ? '' : play.commands[i] ? (play.commands[i].ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>') : '<span class="muted">–</span>';
+  const outcome = (i) => !play ? '' : play.commands[i] ? outcomeMark(play.commands[i]) : '<span class="muted">–</span>';
   $('commands').innerHTML = scn.commands.map((c, i) => `<div class="item ${sel.kind === 'command' && sel.index === i ? 'sel' : ''}" data-cmd="${i}">
     <span class="muted">${i + 1}.</span><span class="grow">${esc(describe(c))}</span>${outcome(i)}
     <button class="mini" data-up="${i}">↑</button><button class="mini" data-down="${i}">↓</button></div>`).join('')
@@ -953,7 +1035,8 @@ function renderCommandForm() {
     form.append(numberRow('x, y, z mm', c.pose.slice(0, 3), (v) => { c.pose.splice(0, 3, ...v); drawTargets(); attachGizmo(); renderCommandList(); edited(false); }));
     form.append(numberRow('rotvec rad', c.pose.slice(3), (v) => { c.pose.splice(3, 3, ...v); drawTargets(); attachGizmo(); edited(false); }, 0.05));
     const row = document.createElement('div'); row.className = 'row';
-    row.innerHTML = '<button data-act="tcp">= current TCP</button><button data-act="ik">Solve IK (planner)</button>';
+    row.innerHTML = '<button data-act="tcp">= current TCP</button><button data-act="ik">Solve IK (planner)</button><button data-act="copy" title="Paste it in the Arm init position section">Copy pose</button>';
+    row.querySelector('[data-act=copy]').onclick = () => copyPose(c.pose);
     row.querySelector('[data-act=tcp]').onclick = () => { if (lastTcp) { c.pose = lastTcp.map((v, i) => round(v, i < 3 ? 1 : 4)); select('command', sel.index); edited(false); } };
     row.querySelector('[data-act=ik]').onclick = () => solveIk(c);
     form.append(row);
@@ -973,10 +1056,54 @@ function renderCommandForm() {
     }
   }
   const del = document.createElement('div'); del.className = 'row';
-  del.innerHTML = '<button>Delete command</button>';
-  del.firstChild.onclick = () => { scn.commands.splice(sel.index, 1); select(null); edited(false); };
+  del.innerHTML = '<button data-act="dup">Duplicate command</button><button data-act="del">Delete command</button>';
+  del.querySelector('[data-act=dup]').onclick = () => {
+    scn.commands.splice(sel.index + 1, 0, JSON.parse(JSON.stringify(c)));
+    select('command', sel.index + 1); edited(false);
+  };
+  del.querySelector('[data-act=del]').onclick = () => { scn.commands.splice(sel.index, 1); select(null); edited(false); };
   form.append(del);
   box.append(form);
+}
+
+// ----- position -> joints ----------------------------------------------------------------------
+let armPose = null;    // the TCP pose typed in the Arm section [x, y, z mm, rx, ry, rz rad]
+let copiedPose = null; // the last pose copied from a pose command
+
+/** The Arm section's pose fields. */
+function renderArmPose() {
+  const box = $('armPose'); box.innerHTML = '';
+  if (!armPose) armPose = lastTcp ? lastTcp.map((v, i) => round(v, i < 3 ? 1 : 4)) : [400, 0, 300, Math.PI, 0, 0];
+  box.append(numberRow('x, y, z mm', armPose.slice(0, 3), (v) => armPose.splice(0, 3, ...v)));
+  box.append(numberRow('rotvec rad', armPose.slice(3), (v) => armPose.splice(3, 3, ...v), 0.05));
+}
+
+/** Copies a pose for "Paste pose" (also to the system clipboard as JSON). pose: [x, y, z mm, rx, ry, rz rad]. */
+function copyPose(pose) {
+  copiedPose = pose.slice();
+  try { navigator.clipboard?.writeText(JSON.stringify(copiedPose)); } catch { /* the in-page copy is enough */ }
+  toast('Pose copied: paste it in the Arm init position section');
+}
+
+/** Pastes the copied pose (or a [x, y, z, rx, ry, rz] JSON from the system clipboard) into the Arm pose fields. */
+async function pastePose() {
+  let pose = copiedPose;
+  if (!pose) {
+    try { pose = JSON.parse(await navigator.clipboard.readText()); } catch { pose = null; }
+  }
+  if (!Array.isArray(pose) || pose.length !== 6 || pose.some((v) => typeof v !== 'number')) { toast('Copy a pose from a pose command first', true); return; }
+  armPose = pose.slice(); renderArmPose();
+}
+
+/** Planner IK for the Arm pose; the joints go on the sliders (and into what they edit: init joints or a joints command). */
+async function poseToJoints() {
+  try {
+    const reply = await api('/api/ik', { scenario: scn, pose: armPose, joints: previewJoints });
+    setPreview(reply.joints);
+    slidersChanged();
+    toast(`IK: TCP within ${reply.error_mm} mm of the pose${reply.base_collision ? ' — the pose is inside the robot base!' : ''}`
+      + (sel.kind === 'start' ? ' · set as init joints' : ''), reply.base_collision || reply.error_mm > 5);
+  } catch (e) { toast(e.message, true); }
 }
 
 /** Draws a target for each pose command; the selected one bigger. */
@@ -1021,6 +1148,7 @@ function loadScenario(data, file) {
   $('file').value = file; $('name').value = scn.name || '';
   $('files').value = file;
   placeBillie(); renderBillieForm();
+  roomMapKey = ''; drawRoomMap();
   worldReply = null;
   select(null);
   setPreview(scn.start_joints_deg);
@@ -1065,6 +1193,7 @@ function edited(objects = true) {
   dirty = true;
   exitPlayback();
   placeBillie();
+  drawRoomMap();
   if (objects) refreshWorld();
 }
 
@@ -1103,7 +1232,36 @@ function saveSetting(key, value) { try { localStorage.setItem(`worldsim.${key}`,
 function renderTargets() {
   $('targets').innerHTML = [LOCAL, ...robots].map((t) => `<div class="row">
     <label style="width:auto"><input type="checkbox" data-target="${esc(t)}" ${chosen.has(t) ? 'checked' : ''}> ${t === LOCAL ? 'this Mac' : esc(t)}</label>
-    ${t === LOCAL ? `<span class="small muted">planner ${esc(plannerState)}</span>` : `<button class="mini" data-remove="${esc(t)}" title="Remove from the list">✕</button>`}</div>`).join('');
+    ${t === LOCAL ? `<span class="small muted">planner ${esc(plannerState)}</span>` : robotControls(t)}</div>`).join('');
+}
+
+let robotStates = {};  // host -> /api/robots status of its connection
+let robotTimer = null;
+// [ms] How often connection states are fetched: fast while one is starting, slow otherwise.
+const ROBOT_POLL_FAST_MS = 2000, ROBOT_POLL_SLOW_MS = 15000;
+
+/** A robot's connection state and its Connect / Disconnect and remove buttons. host: ssh destination. Returns: HTML. */
+function robotControls(host) {
+  const r = robotStates[host];
+  const log = esc((r?.log ?? []).join('\n'));
+  const words = { connecting: 'connecting…', syncing: 'syncing code…', building: `warming up the planner… ${r?.seconds ?? 0}s`,
+    ready: r?.busy ? 'connected · planning' : 'connected · warm', error: 'connection failed', disconnected: 'not connected' };
+  const cls = !r ? 'muted' : r.state === 'ready' ? 'ok' : r.state === 'error' ? 'bad' : 'warn';
+  const live = r && !['error', 'disconnected'].includes(r.state);
+  return `<span class="small ${cls}" title="${esc(r?.detail ?? 'Runs here sync and warm up the planner each time; Connect keeps a warm planner on the robot')}\n\n${log}">${words[r?.state] ?? 'not connected'}</span>
+    <button class="mini" data-${live ? 'disconnect' : 'connect'}="${esc(host)}">${live ? 'Disconnect' : 'Connect'}</button>
+    <button class="mini" data-remove="${esc(host)}" title="Remove from the list">✕</button>`;
+}
+
+/** Fetches the robots' connection states and redraws them; polls fast while one is starting. */
+async function pollRobots() {
+  clearTimeout(robotTimer);
+  try {
+    robotStates = Object.fromEntries((await api('/api/robots')).robots.map((r) => [r.host, r]));
+    renderTargets();
+  } catch (e) { /* the server may be restarting; try again */ }
+  const starting = Object.values(robotStates).some((r) => ['connecting', 'syncing', 'building'].includes(r.state) || r.busy);
+  robotTimer = setTimeout(pollRobots, starting ? ROBOT_POLL_FAST_MS : ROBOT_POLL_SLOW_MS);
 }
 
 /** Starts a run of the edited scenario on the ticked machines and follows it. */
@@ -1158,7 +1316,9 @@ function runDetails(meta, live) {
   const lines = Object.entries(meta.targets).map(([name, t]) => {
     const s = t.summary;
     const state = t.status === 'done'
-      ? `${s.failed ? `<span class="bad">${s.failed} failed</span>` : '<span class="ok">✓</span>'} planner ${s.planner_s.toFixed(1)}s · estimate ${s.estimate_s.toFixed(1)}s`
+      ? `${s.failed ? `<span class="bad">${s.failed} failed</span>` : '<span class="ok">✓</span>'}`
+        + (s.silent_misses ? ` <span class="bad" title="finished, but off target: Billie reports these as done">⚠ ${s.silent_misses} silent miss${s.silent_misses > 1 ? 'es' : ''}</span>` : '')
+        + ` planner ${s.planner_s.toFixed(1)}s · estimate ${s.estimate_s.toFixed(1)}s`
         + (s.free_planner_s == null ? '' : ` · <span class="muted">no obstacles ${s.free_planner_s.toFixed(1)}s</span>`)
       : t.status === 'failed' ? '<span class="bad">failed</span>' : `<span class="warn">${esc(t.stage || t.status)}…</span>`;
     const actions = t.status !== 'done' ? '' : ` <button class="mini" data-play="${esc(meta.id)}|${esc(name)}">▶ play</button>
@@ -1244,22 +1404,71 @@ let markerNote = '';  // why the clicked marker's command has no samples (a ✗ 
 function startPlayback(reply, label) {
   play = reply; gizmo.detach();
   $('outcomes').innerHTML = `<div class="small muted">Playing ${esc(label)}</div>`
-    + (reply.warnings || []).map((w) => `<div class="small bad">⚠ ${esc(w)}</div>`).join('') + reply.commands.map((c, i) => `<div class="small">${i + 1}.
-    ${c.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} ${c.cmd} <span class="muted">${c.seconds}s</span>${c.error ? `<div class="bad">${esc(c.error)}</div>` : ''}</div>`).join('');
+    + (reply.warnings || []).map((w) => `<div class="small bad">⚠ ${esc(w)}</div>`).join('') + zonesHtml(reply) + reply.commands.map((c, i) => `<div class="small">${i + 1}. ${outcomeMark(c)} ${c.cmd} <span class="muted">${c.seconds}s</span>
+    ${c.error ? `<div class="bad">${esc(c.error)}</div>` : c.check && c.check.verdict !== 'reached' ? `<div class="${silent(c) ? 'bad' : 'muted'}">${esc(c.check.text)}</div>` : ''}</div>`).join('');
   const levels = { ERROR: 'bad', WARNING: 'warn', DEBUG: 'muted' };
-  $('events').innerHTML = reply.events.map((e) => `<div class="${levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}</div>`).join('');
+  $('events').innerHTML = reply.events.map((e) => `<div class="${e.sim_only ? 'muted' : levels[e.level] || ''}">[${e.command + 1}] ${esc(e.message)}${e.sim_only ? ' <i>(simulation note: the robot does not send this)</i>' : ''}</div>`).join('');
   $('hud').style.display = 'block';
   $('timeline').max = reply.poses.length - 1; playPos = 0; playing = true; $('play').textContent = '⏸';
   buildCapsules(reply.capsules);  // the run's planner model, e.g. a robot's gripper box
   renderMarkers(reply);
+  renderBands(reply);
+  drawZoneMarkers(reply);
+  // The TCP path, colored by how close the arm is at each sample: blue clear, orange closer than safe, magenta inside.
   const points = reply.tcp_mm.map((p) => new THREE.Vector3(p[0] / 1000, p[1] / 1000, p[2] / 1000));
-  pathLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: 0x2f6fdf }));
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const colors = reply.link_state.map((row) => new THREE.Color([0x2f6fdf, 0xffa000, 0xff00ff][Math.max(...row)]).toArray()).flat();
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  pathLine = new THREE.Line(geometry, new THREE.LineBasicMaterial({ vertexColors: true }));
   armRoot.add(pathLine);
   renderCommandList(); showSample(0);
 }
 
 // [px] Markers whose ticks are closer than about one marker's width ("12✗" at 10px) are drawn side by side.
 const MARKER_GAP_PX = 26;
+
+const zoneGroup = new THREE.Group();  // playback: a marker at each near-collision zone's closest point
+armRoot.add(zoneGroup);
+
+/** The run panel's list of zones closer than safe; a click jumps to the zone's closest moment. reply: /api/playback reply. Returns: HTML. */
+function zonesHtml(reply) {
+  const zones = reply.near_zones || [];
+  if (!zones.length) return `<div class="small ok">Never closer than ${reply.safe_mm} mm (safe distance) to an avoid object.</div>`;
+  const rows = zones.map((z) => `<div class="small zone ${z.inside ? 'bad' : 'warn'}" data-zone-sample="${z.worst_sample}"
+    title="planner capsule min ${signedMm(z.capsule_min_mm)} · real mesh min ${signedMm(z.mesh_min_mm)} · samples ${z.first_sample}-${z.last_sample}">
+    cmd ${z.command + 1} targets ${z.first_target}–${z.last_target}: ${esc(z.link)} ${z.inside ? `${zoneMm(-z.worst_mm)} mm inside` : `${zoneMm(z.worst_mm)} mm from`}
+    ${esc(z.object ?? 'an object')} (${z.by})</div>`).join('');
+  return `<div class="small"><b>Closer than ${reply.safe_mm} mm (safe distance): ${zones.length} zone${zones.length > 1 ? 's' : ''}</b></div>${rows}`;
+}
+
+/** A zone distance for the list: one decimal under 10 mm, so a 0.4 mm contact does not read "0". mm: the value. Returns: text. */
+function zoneMm(mm) { return mm.toFixed(Math.abs(mm) < 10 ? 1 : 0); }
+
+/** Bands under the play bar where the arm is closer than safe (magenta: inside). reply: /api/playback reply. */
+function renderBands(reply) {
+  const span = Math.max(reply.poses.length - 1, 1);
+  $('bands').innerHTML = (reply.near_zones || []).map((z) => `<span class="band ${z.inside ? 'inside' : ''}"
+    style="left: ${(100 * z.first_sample) / span}%; width: ${(100 * (z.last_sample - z.first_sample + 1)) / span}%"></span>`).join('');
+}
+
+/** A marker at each zone's closest arm point, with a line to the object; clicking it jumps there. reply: /api/playback reply. */
+function drawZoneMarkers(reply) {
+  clearGroup(zoneGroup);
+  for (const z of reply.near_zones || []) {
+    if (!z.arm_point_mm) continue;
+    const color = z.inside ? 0xff00ff : 0xffa000;
+    const a = new THREE.Vector3(...z.arm_point_mm).multiplyScalar(0.001), b = new THREE.Vector3(...z.object_point_mm).multiplyScalar(0.001);
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 8), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+    ball.position.copy(a); ball.renderOrder = 10;
+    ball.userData.pick = { kind: 'zone', sample: z.worst_sample };
+    zoneGroup.add(ball, new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), new THREE.LineBasicMaterial({ color, depthTest: false })));
+  }
+}
+
+/** Pauses the playback at one sample. k: sample index. */
+function jumpTo(k) {
+  playing = false; $('play').textContent = '▶'; playPos = k; showSample(k);
+}
 
 /**
  * Marks on the play bar where the arm reaches each command's last target (red if the command
@@ -1293,6 +1502,7 @@ function exitPlayback() {
   if (!play) return;
   play = null; playing = false; $('hud').style.display = 'none';
   applyPushAngles(null);
+  clearGroup(zoneGroup); $('bands').innerHTML = '';
   buildCapsules(model.links);
   if (pathLine) { armRoot.remove(pathLine); pathLine.geometry.dispose(); pathLine = null; }
   renderCommandList(); attachGizmo(); refreshArm();
@@ -1346,6 +1556,11 @@ $('commands').addEventListener('click', (e) => {
   const row = e.target.closest('[data-cmd]'); if (row) select('command', +row.dataset.cmd);
 });
 $('editStart').onclick = () => select(sel.kind === 'start' ? null : 'start');
+$('copyJointsCmd').onclick = () => $('addJoints').click();
+$('copyPoseCmd').onclick = () => $('addPose').click();
+$('poseFromTcp').onclick = () => { if (lastTcp) { armPose = lastTcp.map((v, i) => round(v, i < 3 ? 1 : 4)); renderArmPose(); } };
+$('pastePose').onclick = pastePose;
+$('poseToJoints').onclick = poseToJoints;
 $('jumpInit').onclick = () => { exitPlayback(); if (sel.kind === 'command' || sel.kind === 'start') select(null); setPreview(scn.start_joints_deg); };
 $('markers').addEventListener('click', (e) => {
   const k = e.target.dataset.sample; if (k === undefined) return;
@@ -1376,7 +1591,17 @@ $('targets').addEventListener('change', (e) => {
   if (e.target.checked) chosen.add(t); else chosen.delete(t);
   saveSetting('chosen', [...chosen]);
 });
-$('targets').addEventListener('click', (e) => {
+$('targets').addEventListener('click', async (e) => {
+  const { connect, disconnect } = e.target.dataset;
+  if (connect || disconnect) {
+    try {
+      const reply = await api(connect ? '/api/robot/connect' : '/api/robot/disconnect', { host: connect || disconnect, robot_checkout: $('checkout').value.trim() });
+      robotStates = Object.fromEntries(reply.robots.map((r) => [r.host, r]));
+      if (disconnect) delete robotStates[disconnect];
+      renderTargets(); pollRobots();
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
   const t = e.target.dataset.remove; if (t === undefined) return;
   robots = robots.filter((r) => r !== t); chosen.delete(t);
   saveSetting('robots', robots); saveSetting('chosen', [...chosen]); renderTargets();
@@ -1410,6 +1635,10 @@ $('capsules').onclick = toggleCapsules;
 $('play').onclick = () => { markerNote = ''; playing = !playing; $('play').textContent = playing ? '⏸' : '▶'; if (playing && playPos >= play.poses.length - 1) playPos = 0; };
 $('timeline').addEventListener('input', () => { markerNote = ''; playing = false; $('play').textContent = '▶'; playPos = +$('timeline').value; showSample(playPos); });
 $('closePlayback').onclick = exitPlayback;
+$('outcomes').addEventListener('click', (e) => {
+  const zone = e.target.closest('[data-zone-sample]');
+  if (zone && play) jumpTo(+zone.dataset.zoneSample);
+});
 window.addEventListener('keydown', (e) => {
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
   if (e.key === 'w') setGizmoMode('translate');
@@ -1464,12 +1693,12 @@ async function start() {
   try { model = await api('/api/model'); }
   catch (e) { $('loading').textContent = e.message; return; }
   $('loading').remove();
-  buildCapsules(model.links); buildSliders(); loadRobot();
+  buildCapsules(model.links); buildSliders(); loadRobot(); renderArmPose();
   robots = [...new Set([...model.robots, ...loadSetting('robots', [])])];
   chosen = new Set(loadSetting('chosen', [LOCAL]).filter((t) => t === LOCAL || robots.includes(t)));
   $('checkout').value = loadSetting('checkout', model.robot_checkout);
   $('compareFree').checked = loadSetting('compareFree', true);
-  renderTargets(); loadHistory();
+  renderTargets(); loadHistory(); pollRobots();
   const wanted = new URLSearchParams(location.search).get('file');
   const { files } = await api('/api/scenarios');
   $('files').innerHTML = files.map((f) => `<option>${esc(f)}</option>`).join('');

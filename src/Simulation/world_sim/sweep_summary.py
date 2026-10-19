@@ -19,6 +19,7 @@ SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "scenarios")
 PROBLEMS = {
     "1. planner misses a solution": ("solver_miss", "ik_miss"),
     "1. planner leaves the arm in collision": ("end_state_invalid",),
+    "1. tool faster than the controller allows (xArm error 60)": ("tool_speed",),
     "2. too slow on the robot": ("replay_stall", "slow_single_move", "slow_replay_start", "recompile"),
     "probably no solution (oracle found no path either)": ("no_path_found",),
     "not judged (invalid goal on this arm, or invalid start)": ("goal_invalid", "untestable_start"),

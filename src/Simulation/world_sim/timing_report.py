@@ -163,7 +163,7 @@ def command_split_html(run: Run) -> str:
     rows = []
     for c, outcome in enumerate(run.commands):
         free_cells = _split_cell(free["timings"], free["commands"], c) if free is not None else ""
-        rows.append(f"<tr><td>{c}</td><td>{html.escape(outcome['spec']['cmd'])}</td>"
+        rows.append(f"<tr><td>{c + 1}</td><td>{html.escape(outcome['spec']['cmd'])}</td>"
                     f"{_split_cell(run.timings, run.commands, c)}{free_cells}</tr>")  # fmt: skip
     top = "<th colspan='4'>with obstacles</th>" + ("<th colspan='4'>without obstacles</th>" if free is not None else "")
     return (f"<h4>Planner time per command: compile vs compute</h4><table><tr><th rowspan='2'>#</th>"
@@ -184,12 +184,12 @@ def _gantt_run(fig: go.Figure, results: dict, offset: float, label: str, colors:
         rows += [n for n in names if n not in rows]
         starts = [outcome["start_s"]] + [t["start_s"] for t in calls]
         widths = [outcome["end_s"] - outcome["start_s"]] + [t["seconds"] for t in calls]
-        hover = [f"cmd {c} {outcome['spec']['cmd']}: {widths[0]:.2f}s{'' if outcome['ok'] else ' FAILED'}"] + [
-            f"cmd {c} {t['call']} ({t['n']} poses): {t['seconds']:.3f}s, compile {t.get('compile_s', 0):.2f}s, "
+        hover = [f"cmd {c + 1} {outcome['spec']['cmd']}: {widths[0]:.2f}s{'' if outcome['ok'] else ' FAILED'}"] + [
+            f"cmd {c + 1} {t['call']} ({t['n']} poses): {t['seconds']:.3f}s, compile {t.get('compile_s', 0):.2f}s, "
             f"cache {t.get('cache_hits', 0)} hits / {t.get('cache_misses', 0)} misses" for t in calls]  # fmt: skip
         fig.add_trace(go.Bar(y=names, x=widths, base=np.asarray(starts) + offset, orientation="h",
                              marker_color=colors[c % len(colors)], hovertext=hover, hoverinfo="text",
-                             name=f"{label} cmd {c}: {outcome['spec']['cmd']}", legendgroup=label))  # fmt: skip
+                             name=f"{label} cmd {c + 1}: {outcome['spec']['cmd']}", legendgroup=label))  # fmt: skip
 
 
 def gantt_figure(run: Run, colors: list[str]) -> go.Figure | None:

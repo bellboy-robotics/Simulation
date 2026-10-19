@@ -1,0 +1,62 @@
+{
+ "billie": {
+  "pose": [
+   3450.0,
+   -2500.0,
+   126.251
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "start_joints_deg": [
+  -80.2,
+  45.0,
+  -114.5,
+  96.9,
+  -63.7,
+  123.9
+ ],
+ "objects": [],
+ "commands": [
+  {
+   "cmd": "replay_policy",
+   "repo_id": "bellboy-robotics/B-policy_record-20260125-193134-BILLIE-12",
+   "speed": 1.0,
+   "transform": "poses"
+  }
+ ],
+ "name": "kitchen_t076_replay_refused",
+ "kitchen": {
+  "base_xy": [
+   3.4499999999999993,
+   -2.5
+  ],
+  "heading_rad": 2.2034965247025875,
+  "unseen_share": 0.0026336119109488026,
+  "capsules_in_reach": 28,
+  "map": "4f041b6214cef1db893293e8b8e9d4214103ffe7dc80554327a791e8bd6a37a8",
+  "capsule_set": "B-50",
+  "task": 76,
+  "kind": "replay",
+  "map_file": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+ },
+ "sweep": {
+  "index": 76,
+  "seed": 1,
+  "goal_joints_deg": [
+   [
+    136.63,
+    14.28,
+    -147.75,
+    -42.17,
+    106.55,
+    232.57
+   ]
+  ]
+ },
+ "map": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+}

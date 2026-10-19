@@ -20,8 +20,8 @@ import time
 import traceback
 from typing import Callable
 
-from Simulation.world_sim import robot
-from Simulation.world_sim.analysis import Run, load_run
+from Simulation.world_sim import robot, robot_link
+from Simulation.world_sim.analysis import Run, load_run, target_checks, target_errors
 from Simulation.world_sim.report import command_times, write_report
 
 RUNS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "output", "world_sim", "runs"))
@@ -110,6 +110,13 @@ def _run_target(meta: dict, name: str, plan_locally: Callable[[dict, dict], dict
             from Simulation.world_sim.plan import save_results  # noqa: PLC0415 (imports JAX)
 
             save_results(planned, results)
+        elif robot_link.ready(target["host"]) is not None:
+            # A connected robot: its worker has the code and a warm planner; no sync, no warm-up.
+            stage("planning on the connected robot")
+            with open(scenario_file) as f:
+                planned = robot_link.ready(target["host"]).plan(json.load(f), meta["flags"], log)
+            with open(results, "w") as f:
+                json.dump(planned, f)  # plain JSON already (the worker's reply)
         else:
             flags = [f"--{k.replace('_', '-')}" for k, on in meta["flags"].items() if on]
             stage("syncing code and scenario")
@@ -166,6 +173,7 @@ def timing_summary(run: Run) -> dict:
         "planner_s": round(sum(c["planner_s"] for c in commands), 3),
         "estimate_s": round(sum(c["estimate_s"] for c in commands), 3),
         "failed": sum(not c["ok"] for c in commands),
+        "silent_misses": sum(k["verdict"] in ("silent miss", "stayed put") for k in target_checks(run, *target_errors(run))),
         "free_planner_s": free_planner_s,
         "free_estimate_s": free_estimate_s,
         "free_failed": None if free is None else sum(not c["ok"] for c in free["commands"]),

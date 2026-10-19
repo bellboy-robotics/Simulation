@@ -11,7 +11,7 @@ solution. It knows the same constraints the robot enforces, and a bit more:
 import jax
 import jax.numpy as jnp
 import numpy as np
-from billie_utils.world_collision_check_poc import link_obstacle_distances, link_transforms, sample_joint_path
+from billie_utils.arm_collision_model import link_obstacle_distances, link_transforms, sample_joint_path
 
 from Simulation.world_sim.planner import SimPlanner
 

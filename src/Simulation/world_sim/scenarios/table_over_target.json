@@ -1,13 +1,14 @@
 {
   "name": "Pose target inside a table",
-  "start_joints_deg": [-15.4, 4.3, -61.6, 78.3, 100.1, 45.3],
+  "start_joints_deg": [-15.4, 4.3, -99.1, 78.3, 100.1, 45.3],
   "objects": [
-    {"name": "table", "role": "avoid", "type": "table", "center_xy_mm": [498.5, 125.9], "top_height_mm": 648.3, "size_mm": [430, 470, 100], "yaw_deg": 0}
+    {"name": "table", "role": "avoid", "type": "table", "center_xy_mm": [554.5, 158.8], "top_height_mm": 820, "size_mm": [580, 470, 100], "yaw_deg": 0}
   ],
   "commands": [
+    {"cmd": "joints", "joints": [-15.4, 4.3, -98.7, 78.3, 100.1, 45.3]},
     {"cmd": "pose", "pose": [349.3, 6.2, 92.4, 0, 2.5, 0]},
-    {"cmd": "pose", "pose": [349.3, 6.2, 250, 0, 2.5, 0]},
-    {"cmd": "joints", "joints": [-15.4, 4.3, -61.6, 78.3, 100.1, 45.3]}
+    {"cmd": "pose", "pose": [605.9, 118.4, 514.5, -0.3791, 0.3766, 0.5692]},
+    {"cmd": "pose", "pose": [391.8, -225.2, 184, 0, 2.5, 0]}
   ],
   "billie": {"pose": [0, 0, 0], "arm_to_base": [-130, 0, 0]}
 }

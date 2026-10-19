@@ -1,0 +1,67 @@
+{
+ "billie": {
+  "pose": [
+   3600.0,
+   -2500.0,
+   96.48
+  ],
+  "arm_to_base": [
+   -180,
+   0,
+   0
+  ]
+ },
+ "floor_z_mm": -440.5,
+ "start_joints_deg": [
+  149.6,
+  11.6,
+  -44.9,
+  -42.6,
+  -31.8,
+  131.6
+ ],
+ "objects": [],
+ "commands": [
+  {
+   "cmd": "pose",
+   "pose": [
+    -174.2,
+    442.7,
+    208.6,
+    -1.0308,
+    -1.2399,
+    -0.7579
+   ]
+  }
+ ],
+ "name": "kitchen_t014_pose_refused",
+ "kitchen": {
+  "base_xy": [
+   3.6000000000000014,
+   -2.5
+  ],
+  "heading_rad": 1.6839154151375195,
+  "unseen_share": 0.0044727759385785725,
+  "capsules_in_reach": 28,
+  "map": "4f041b6214cef1db893293e8b8e9d4214103ffe7dc80554327a791e8bd6a37a8",
+  "capsule_set": "B-50",
+  "task": 14,
+  "kind": "pose",
+  "map_file": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+ },
+ "sweep": {
+  "index": 14,
+  "seed": 1,
+  "goal_joints_deg": [
+   [
+    110.9,
+    -20.0,
+    -7.1,
+    178.9,
+    63.5,
+    -166.5
+   ]
+  ]
+ },
+ "map": "output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"
+}

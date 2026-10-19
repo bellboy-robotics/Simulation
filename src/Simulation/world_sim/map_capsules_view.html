@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitchen Capsules 3D</title>
+<style>
+  :root { --bg: #111418; --panel: #1c2128ee; --text: #e6e9ee; --muted: #9aa4b2; --accent: #4c9ffe; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+  #view { position: fixed; inset: 0; }
+  #panel { position: fixed; top: 12px; left: 12px; width: 300px; max-width: calc(100vw - 48px); background: var(--panel);
+           border-radius: 8px; padding: 12px; box-shadow: 0 4px 16px #0008; }
+  #panel h1 { font-size: 15px; margin: 0 0 6px; }
+  #panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 6px 0; }
+  #panel input[type=range] { flex: 1; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  #info { margin-top: 8px; padding-top: 8px; border-top: 1px solid #333a44; white-space: pre-line; }
+  .key span { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div id="loading">Loading the office-2 mesh…</div>
+<div id="panel">
+  <h1>Kitchen capsules</h1>
+  <div class="muted" id="mapinfo"></div>
+  <label>Capsule set <select id="set"></select></label>
+  <div class="muted" id="setinfo"></div>
+  <label><span><input type="checkbox" id="showMesh" checked> 3D map</span> <span class="muted">cut at <b id="cutv"></b> m</span></label>
+  <input type="range" id="cut" min="0.3" max="2.4" step="0.05" value="1.7" style="width:100%">
+  <label>Capsule opacity <input type="range" id="opacity" min="0.1" max="1" step="0.05" value="0.55"></label>
+  <label><span><input type="checkbox" id="showTargets"> all target voxels</span></label>
+  <h1 style="margin-top:10px">Base pose</h1>
+  <label>Planner slots
+    <span class="row"><label><input type="radio" name="slots" value="0"> off</label>
+    <label><input type="radio" name="slots" value="32" checked> 32</label>
+    <label><input type="radio" name="slots" value="64"> 64</label></span></label>
+  <label>Position <input type="range" id="base" min="0" step="1" value="0"></label>
+  <label>Heading <input type="range" id="heading" min="0" max="315" step="45" value="0"></label>
+  <div class="key"><span style="background:#4c9ffe"></span>given to the planner
+    <span style="background:#f0a040;margin-left:8px"></span>in reach, left out<br>
+    <span style="background:#777"></span>out of reach <span style="background:#ff3040;margin-left:8px"></span>uncovered surface</div>
+  <div id="info"></div>
+</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+
+const DATA = __DATA__;
+const GLB_B64 = "__GLB__";
+const $ = (id) => document.getElementById(id);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.localClippingEnabled = true;
+$("view").appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111418);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(3, -4, 8); scene.add(sun);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 200);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+const center = new THREE.Vector3(DATA.bases[0][0], DATA.bases[0][1], 0.6);
+camera.position.set(center.x - 2.5, center.y - 5.5, 6.5);
+controls.target.copy(center);
+
+const cutPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1.7);
+let meshRoot = null;
+
+// The office-2 mesh: map frame, z up, vertex colors; meshopt-compressed by the mapper.
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const glb = Uint8Array.from(atob(GLB_B64), (c) => c.charCodeAt(0)).buffer;
+loader.parse(glb, "", (gltf) => {
+  meshRoot = gltf.scene;
+  meshRoot.traverse((o) => {
+    if (o.isMesh) {
+      o.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, clippingPlanes: [cutPlane] });
+    }
+  });
+  scene.add(meshRoot);
+  $("loading").remove();
+}, (err) => { $("loading").textContent = "Could not load the mesh: " + err; });
+
+// Base positions (all usable spots) as small markers on the floor.
+const baseDots = new THREE.Group();
+for (const [x, y] of DATA.bases) {
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.03, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  dot.position.set(x, y, 0.01); baseDots.add(dot);
+}
+scene.add(baseDots);
+
+// One capsule mesh per capsule of the selected set.
+let capGroup = new THREE.Group(); scene.add(capGroup);
+let targetPts = null, uncoveredPts = null;
+const armMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 12), new THREE.MeshBasicMaterial({ color: 0x00ff88 }));
+const reachSphere = new THREE.Mesh(new THREE.SphereGeometry(DATA.reach_m, 32, 16),
+  new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true, transparent: true, opacity: 0.12 }));
+scene.add(armMarker, reachSphere);
+
+function capsuleMesh([sx, sy, sz, ex, ey, ez, r]) {
+  const s = new THREE.Vector3(sx, sy, sz), e = new THREE.Vector3(ex, ey, ez);
+  const len = s.distanceTo(e);
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 6, 16),
+    new THREE.MeshLambertMaterial({ color: 0x777777, transparent: true, opacity: 0.5, depthWrite: false }));
+  m.position.copy(s).add(e).multiplyScalar(0.5);
+  if (len > 1e-6) m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), e.clone().sub(s).normalize());
+  return m;
+}
+
+function segDist(p, c) {
+  const ax = c[3] - c[0], ay = c[4] - c[1], az = c[5] - c[2];
+  const L = ax * ax + ay * ay + az * az;
+  let t = L > 0 ? ((p[0] - c[0]) * ax + (p[1] - c[1]) * ay + (p[2] - c[2]) * az) / L : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - c[0] - t * ax, p[1] - c[1] - t * ay, p[2] - c[2] - t * az);
+}
+
+function points(flatMm, color, size) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(flatMm.map((v) => v / 1000), 3));
+  return new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: true }));
+}
+
+function loadSet() {
+  const set = DATA.sets[$("set").value];
+  scene.remove(capGroup); capGroup = new THREE.Group();
+  set.caps.forEach((c) => capGroup.add(capsuleMesh(c)));
+  scene.add(capGroup);
+  if (targetPts) scene.remove(targetPts);
+  targetPts = points(set.targets, 0x9be38b, 0.02);
+  scene.add(targetPts);
+  const s = set.summary;
+  $("setinfo").textContent = `${s.capsules} capsules for ${s.targets} surface voxels. Poses fully covered: ` +
+    `${Math.round(s.full32 * 100)}% with 32, ${Math.round(s.full64 * 100)}% with 64. Largest bulge ${Math.round(s.bulge_max_mm)} mm.`;
+  update();
+}
+
+function update() {
+  const set = DATA.sets[$("set").value];
+  const slots = Number(document.querySelector("input[name=slots]:checked").value);
+  const [bx, by] = DATA.bases[Number($("base").value)];
+  const h = Number($("heading").value) * Math.PI / 180;
+  const arm = [bx + DATA.arm_offset_m * Math.cos(h), by + DATA.arm_offset_m * Math.sin(h), DATA.arm_z_m];
+  armMarker.position.set(...arm); reachSphere.position.set(...arm);
+  armMarker.visible = reachSphere.visible = slots > 0;
+  const gaps = set.caps.map((c) => segDist(arm, c) - c[6]);
+  const inReach = gaps.map((g, i) => [g, i]).filter(([g]) => g <= DATA.reach_m).sort((a, b) => a[0] - b[0]).map(([, i]) => i);
+  const chosen = new Set(slots > 0 ? inReach.slice(0, slots) : []);
+  const reachable = new Set(inReach);
+  const op = Number($("opacity").value);
+  capGroup.children.forEach((m, i) => {
+    const color = slots === 0 ? 0x4c9ffe : chosen.has(i) ? 0x4c9ffe : reachable.has(i) ? 0xf0a040 : 0x777777;
+    m.material.color.setHex(color);
+    m.material.opacity = slots > 0 && !reachable.has(i) ? op * 0.25 : op;
+  });
+  if (uncoveredPts) scene.remove(uncoveredPts);
+  let text = "";
+  if (slots > 0) {
+    const unc = [];
+    let near = 0;
+    for (let k = 0; k < set.targets.length; k += 3) {
+      const p = [set.targets[k] / 1000, set.targets[k + 1] / 1000, set.targets[k + 2] / 1000];
+      if (Math.hypot(p[0] - arm[0], p[1] - arm[1], p[2] - arm[2]) > DATA.reach_m) continue;
+      near++;
+      let inside = false;
+      for (const i of chosen) { if (segDist(p, set.caps[i]) <= set.caps[i][6]) { inside = true; break; } }
+      if (!inside) unc.push(set.targets[k], set.targets[k + 1], set.targets[k + 2]);
+    }
+    uncoveredPts = points(unc, 0xff3040, 0.045); scene.add(uncoveredPts);
+    text = `Base (${bx.toFixed(2)}, ${by.toFixed(2)}) m, heading ${$("heading").value}°\n` +
+      `Capsules in reach: ${inReach.length}; given to the planner: ${chosen.size}\n` +
+      `Surface voxels in reach: ${near}; uncovered: ${unc.length / 3} (${near ? (100 * (1 - unc.length / 3 / near)).toFixed(1) : 100}% covered)`;
+  }
+  $("info").textContent = text;
+  targetPts.visible = $("showTargets").checked;
+}
+
+DATA.sets.forEach((s, i) => $("set").add(new Option(s.name, i)));
+// Optional start state from the URL, e.g. #set=3&slots=0 (set index, planner slots).
+const hash = new URLSearchParams(location.hash.slice(1));
+$("set").value = hash.get("set") ?? "0";
+if (hash.get("cam") === "top") { camera.position.set(center.x + 0.01, center.y - 0.01, 9); }
+if (hash.has("slots")) document.querySelector(`input[name=slots][value="${hash.get("slots")}"]`).checked = true;
+$("base").max = DATA.bases.length - 1;
+$("mapinfo").textContent = `office-2 map ${DATA.checksum} · ${DATA.bases.length} usable base positions (white dots). ` +
+  `A = unseen space open up to 1.2 m, B = unseen space may hold capsules; 25/50 = allowed bulge in mm.`;
+$("set").onchange = loadSet;
+for (const id of ["base", "heading", "opacity", "showTargets"]) $(id).oninput = update;
+document.querySelectorAll("input[name=slots]").forEach((r) => (r.onchange = update));
+$("cut").oninput = () => { cutPlane.constant = Number($("cut").value); $("cutv").textContent = $("cut").value; };
+$("showMesh").onchange = () => { if (meshRoot) meshRoot.visible = $("showMesh").checked; };
+$("cutv").textContent = $("cut").value;
+loadSet();
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize); resize();
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

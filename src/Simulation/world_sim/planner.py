@@ -1,12 +1,13 @@
 """The robot's pyroki planner, driven offline: IK solvers, transit planner and world obstacles.
 
-Replaces the dora requests the brain sends (pyroki_node.solve / batch_solve, pyroki_world_poc.
-set_world_obstacles / plan_transit / get_collision_model) with direct calls into the same planner
+Replaces the dora requests the brain sends (pyroki_node.solve / batch_solve, pyroki_world.
+set_world_obstacles / plan_move / plan_replay / get_collision_model) with direct calls into the same planner
 code, and keeps the brain-side module state (obstacles, arm model) the arm-move guard reads.
 Also records how the build went (per phase: time, JAX compile and cache use, the planner's own log
 lines) and, through planner_capture, what each run logs and compiles, for the timing report.
 """
 
+import importlib
 import json
 import logging
 import os
@@ -26,20 +27,35 @@ with capture.import_lines() as _import_window:
 import jax
 import jax.numpy as jnp
 import numpy as np
-from billie_utils.messages import pyroki_world_poc
+from billie_utils.messages import pyroki_world
 from billie_utils.messages.pyroki_node import BATCH_SIZE, MAX_N_ST_PERTURB
-from billie_utils.world_collision_check_poc import CollisionModel, link_transforms
+from billie_utils.arm_collision_model import CollisionModel, link_transforms
 from pyroki_planner import resolver as planner_resolver
 from pyroki_planner import urdf as planner_urdf
-from pyroki_planner import world_collision_poc
-from pyroki_planner.transit_planner_poc import build_transit_solver
+from pyroki_planner import world_collision
+from pyroki_planner.resolver_transit import build_transit_solver
+
+try:  # the room map in the solvers (arm_plan_esdf)
+    from pyroki_planner import esdf_world
+except ImportError:  # an older checkout: capsules only
+    esdf_world = None
+
+try:  # the planner split into plan_single.py / plan_batch.py (arm_planner)
+    from pyroki_planner import plan_batch, plan_single
+except ImportError:  # an older checkout (robot.py --robot-checkout): one move_planner module
+    from pyroki_planner import move_planner as plan_single  # type: ignore[no-redef]
+
+    plan_batch = plan_single  # type: ignore[assignment]
 from scipy.spatial.transform import Rotation
+
+# The Simulation repo root: scenario map paths are relative to it.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 # The planner's target link (resolver.TARGET_LINK_NAME); pose targets are its poses.
 TCP_LINK = "link_tcp"
 # Env vars that change what the planner compiles or where it runs, recorded with the build.
 _BUILD_ENV = ("ENABLE_PYROKI_GPU", "JAX_PLATFORM_NAME", "DEBUG_PYROKI_PLANNER", "DEBUG_MODE",
-              "ENABLE_PYROKI_WORLD_COLLISION", "ENABLE_PYROKI_WORLD_HEIGHTMAP", "ENABLE_PYROKI_SELF_COLLISION",
+              "ENABLE_PYROKI_WORLD_COLLISION", "ENABLE_PYROKI_SELF_COLLISION",
               "ENABLE_PYROKI_DEFAULT_INIT", "PYROKI_TERMINATION_THRESHOLD", "PYROKI_JAX_CACHE_DIR", "XLA_FLAGS")  # fmt: skip
 # Resolver build threads -> the build phase each runs (pyroki-compile: URDF, models, jit setup).
 _IK_THREADS = {"pyroki-compile": "ik_setup", "pyroki-warmup-single": "ik_warmup_single",
@@ -110,7 +126,9 @@ class SimPlanner:
         # per planner call, in order; build_* entries first.
         self.timings: list[dict] = []
         self.command = -1  # scenario command being run, set by the runner for the timings
+        self.adjusted_frames = 0  # IK frames the planner shortened to stay out of an obstacle, since the build
         self.runs_started = 0  # runs that used this planner (see capture_run)
+        self._room_grid = None  # (path, EsdfGrid) of the room map loaded last (see set_room)
         capture.install(lambda: self.command)
         # How the build went (see _finish_build); "phases" grows as they run.
         self.build: dict = {"built_at": time.time(), "phases": []}
@@ -119,15 +137,23 @@ class SimPlanner:
         cache_files_before = _count_files(self._cache_dir())
         try:  # a failed build (e.g. the editor's, which keeps running) must not leave its window collecting
             self._build_ik(window)
-            self.model: CollisionModel = self._phase("export_model", lambda: world_collision_poc.export_collision_model(
+            self.model: CollisionModel = self._phase("export_model", lambda: world_collision.export_collision_model(
                 self.resolver.robot, self.resolver.robot_coll
             ))  # fmt: skip
             self._tcp_index = self.model.link_names.index(TCP_LINK)
+            room_shape = {} if esdf_world is None else {"crop": esdf_world.current_crop()}
             self._transit = self._phase("transit_build", lambda: build_transit_solver(
-                self.resolver.robot, self.resolver.robot_coll
+                self.resolver.robot, self.resolver.robot_coll, **room_shape
             ))  # fmt: skip
-            # The brain's cached arm model, read by the arm-move guard, detours and reroutes.
-            pyroki_world_poc._model_cache = self.model
+            # The planner's routes (IKResolver.route, plan_move, plan_replay) reuse this compiled solver.
+            transit_module = importlib.import_module(build_transit_solver.__module__)
+            if hasattr(transit_module, "_solver"):
+                transit_module._solver = self._transit
+            # The brain's cached arm model, read by the arm-move guard, detours and reroutes; the planner's
+            # own copy (IKResolver.arm_model) is the same model.
+            pyroki_world._model_cache = self.model
+            if hasattr(self.resolver, "arm_model"):
+                self.resolver._arm_model = self.model
             self.set_obstacles(np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0))
             # The robot compiles the transit planner at startup (warm_up_in_background), not on the first replay.
             self._phase("transit_warmup", lambda: self._timed(
@@ -262,16 +288,33 @@ class SimPlanner:
                              "cache_misses": stats["cache_misses"]})  # fmt: skip
         return result
 
-    def set_obstacles(self, starts_m: np.ndarray, ends_m: np.ndarray, radii_m: np.ndarray) -> None:
-        """Replaces the world obstacles on both sides, like poc_set_world_obstacles on the robot.
+    def set_obstacles(
+        self, starts_m: np.ndarray, ends_m: np.ndarray, radii_m: np.ndarray, floor_z_m: float | None = None
+    ) -> None:
+        """Replaces the world obstacles on both sides, like the robot's set_obstacles command.
 
         starts_m, ends_m: (M, 3) capsule segment endpoints, xArm base frame, meters (M may be 0).
         radii_m: (M,) capsule radii, meters.
+        floor_z_m: Arm-frame z of the floor plane the arm stays above, meters; None for no floor.
         """
-        world_collision_poc._current_capsule_rows = world_collision_poc._capsule_rows(starts_m, ends_m, radii_m)
-        world_collision_poc._current_heightmap = world_collision_poc._inactive_heightmap()
-        pyroki_world_poc._last_sent = (np.asarray(starts_m), np.asarray(ends_m), np.asarray(radii_m))
-        pyroki_world_poc._last_sent_heightmap = None
+        capsules = (
+            np.asarray(starts_m, dtype=np.float64).reshape(-1, 3),
+            np.asarray(ends_m, dtype=np.float64).reshape(-1, 3),
+            np.asarray(radii_m, dtype=np.float64).reshape(-1),
+        )
+        # The planner's side (its solvers and its move planner) ...
+        world_collision._current_capsule_rows = world_collision._capsule_rows(*capsules)
+        world_collision._current_capsules = capsules
+        if hasattr(world_collision, "_floor_part"):
+            world_collision._current_floor = world_collision._floor_part(floor_z_m)
+            world_collision._current_floor_z_m = floor_z_m
+        else:  # arm_planner step 1 (d3d14020): a heightmap instead of the floor, never set here
+            world_collision._current_heightmap = world_collision._inactive_heightmap()
+            world_collision._current_arm_heightmap = None
+        # ... and the brain's (the arm-move check and the plots).
+        pyroki_world._last_sent = capsules
+        pyroki_world._last_sent_floor_z_m = floor_z_m
+        pyroki_world._last_sent_heightmap = None
 
     def solve(self, current_deg: np.ndarray, pose6: np.ndarray) -> tuple[np.ndarray, bool]:
         """Single-pose IK in AI mode (regularized toward the rest pose), like pyroki_node.solve for `pose`.
@@ -280,9 +323,19 @@ class SimPlanner:
         pose6: Target TCP pose [x, y, z mm, rx, ry, rz rad rotation vector], xArm base frame.
         Returns: (solved joints in degrees (6,), True if the target is inside the robot base and was skipped).
         """
-        joints_rad, is_base_collision, _, _ = self._timed("solve", 1, lambda: self.resolver.resolve(
-            np.deg2rad(current_deg), np.asarray(pose6, dtype=np.float64), n_st_perturb=MAX_N_ST_PERTURB
-        ))  # fmt: skip
+        start = np.deg2rad(np.asarray(current_deg, dtype=np.float64))
+
+        def solve_and_clear():
+            """The planner node's `plan` handler: the IK, then the move to it kept out of the obstacles."""
+            joints_rad, is_base_collision, _, _ = self.resolver.resolve(
+                start, np.asarray(pose6, dtype=np.float64), n_st_perturb=MAX_N_ST_PERTURB
+            )
+            if not hasattr(plan_batch, "keep_solution_clear"):  # step 1: the node did not shorten moves
+                return joints_rad, is_base_collision
+            clear, _ = plan_batch.keep_solution_clear(self.resolver, start, np.asarray(joints_rad)[None])
+            return clear[0], is_base_collision
+
+        joints_rad, is_base_collision = self._timed("solve", 1, solve_and_clear)
         return np.rad2deg(np.asarray(joints_rad, dtype=np.float64)), bool(is_base_collision)
 
     def batch_solve(
@@ -297,16 +350,52 @@ class SimPlanner:
         Returns: (solved joints (N, 6) degrees, large-motion mask (N,) - a joint jumped > 20 deg).
         """
         assert len(poses6) <= BATCH_SIZE, f"{len(poses6)} poses; the batch solver takes {BATCH_SIZE}"
-        joints_rad, _, large_motion, _, _ = self._timed(call, len(poses6), lambda: self.resolver.resolve_batch(
-            np.deg2rad(current_deg),
-            np.asarray(poses6, dtype=np.float64),
-            None if recorded_deg is None else np.deg2rad(recorded_deg),
-            n_st_perturb=MAX_N_ST_PERTURB,
-        ))  # fmt: skip
+        start = np.deg2rad(np.asarray(current_deg, dtype=np.float64))
+
+        def solve_and_clear():
+            """The planner node's `batch_plan` handler: the batch IK, then its moves kept out of the obstacles."""
+            joints_rad, _, large_motion, _, _ = self.resolver.resolve_batch(
+                start, np.asarray(poses6, dtype=np.float64),
+                None if recorded_deg is None else np.deg2rad(recorded_deg), n_st_perturb=MAX_N_ST_PERTURB,
+            )  # fmt: skip
+            if not hasattr(plan_batch, "keep_solution_clear"):  # step 1: the node did not shorten moves
+                return joints_rad, large_motion
+            clear, adjusted = plan_batch.keep_solution_clear(self.resolver, start, joints_rad)
+            self.adjusted_frames += int(np.sum(adjusted))
+            return clear, large_motion
+
+        joints_rad, large_motion = self._timed(call, len(poses6), solve_and_clear)
         return np.rad2deg(np.asarray(joints_rad, dtype=np.float64)), np.asarray(large_motion)
 
+    def set_room(self, room: dict | None, base_height_m: float) -> None:
+        """Sets the room map the planner plans against, like the robot's mapper map and nav/pose.
+
+        room: World.room ({"map": .esdfbin path relative to the repo root, "billie": the scenario's pose}),
+            or None for no map.
+        base_height_m: Height of the arm base above the floor, meters.
+        """
+        if esdf_world is None:
+            if room is not None:
+                raise RuntimeError("This planner checkout has no esdf_world; the scenario's map needs arm_plan_esdf")
+            return
+        if room is None:
+            esdf_world.set_room(None, None)
+            return
+        from pathlib import Path  # noqa: PLC0415
+
+        from billie_utils.esdf_grid import load_esdf_grid  # noqa: PLC0415
+
+        path = room["map"] if os.path.isabs(room["map"]) else os.path.join(_REPO_ROOT, room["map"])
+        if self._room_grid is None or self._room_grid[0] != path:
+            self._room_grid = (path, load_esdf_grid(Path(path)))
+        x_mm, y_mm, yaw_deg = room["billie"]["pose"]
+        ax_mm, ay_mm, ayaw_deg = room["billie"]["arm_to_base"]
+        map_from_arm = pyroki_world.planar_transform(x_mm / 1000.0, y_mm / 1000.0, np.deg2rad(yaw_deg)) @ \
+            pyroki_world.planar_transform(ax_mm / 1000.0, ay_mm / 1000.0, np.deg2rad(ayaw_deg), base_height_m)  # fmt: skip
+        esdf_world.set_room(self._room_grid[1], map_from_arm)
+
     def plan_transit(self, start_deg: np.ndarray, goal_deg: np.ndarray, call: str = "transit") -> np.ndarray:
-        """Plans a joint path around the obstacles, like pyroki_world_poc.plan_transit.
+        """Plans a joint path around the obstacles with the transit planner, as plan_move and plan_replay do.
 
         start_deg, goal_deg: (6,) end joints of the path, degrees.
         call: Name of this use in the timings ("transit" for replay reroutes, "detour" for single moves).
@@ -315,9 +404,38 @@ class SimPlanner:
         path = self._timed(call, 1, lambda: np.asarray(self._transit(
             jnp.asarray(np.deg2rad(start_deg), dtype=jnp.float32),
             jnp.asarray(np.deg2rad(goal_deg), dtype=jnp.float32),
-            world_collision_poc.current_world_capsules(),
+            world_collision.current_world_capsules(),
+            *([] if esdf_world is None else [esdf_world.current_field()]),
         )))  # fmt: skip
         return np.rad2deg(path.astype(np.float64))
+
+    def plan_move(self, start_deg: np.ndarray, goal_deg: np.ndarray | None = None, goal_pose: np.ndarray | None = None):
+        """One single move decided by the planner's plan_single, like the plan_move request (arm_planner branch).
+
+        start_deg: (6,) joints the arm is at, degrees.
+        goal_deg: (6,) joints to reach, degrees; or goal_pose: (6,) TCP pose [mm, rad rotation vector].
+        Returns: The planner's PlanMoveResponse (status, joints_deg frames ending at the goal, message, min_distance_m).
+        """
+        request = pyroki_world.PlanMoveRequest(
+            start_deg=np.asarray(start_deg, dtype=np.float64),
+            goal_deg=None if goal_deg is None else np.asarray(goal_deg, dtype=np.float64),
+            goal_pose=None if goal_pose is None else np.asarray(goal_pose, dtype=np.float64),
+            n_st_perturb=MAX_N_ST_PERTURB,
+        )
+        return self._timed("plan_move", 1, lambda: plan_single.plan_move(self.resolver, request))
+
+    def plan_replay(self, joints_deg: np.ndarray, positions: np.ndarray):
+        """Routes a pose replay around the obstacles with the planner's replay_planner, like the plan_replay request.
+
+        joints_deg: (N, 6) recorded joints, degrees. positions: (N, 6) recorded TCP poses [mm, rad].
+        Returns: The planner's PlanReplayResponse (status, joints_deg, positions, source_frames, planned, message).
+        """
+        from pyroki_planner import replay_planner  # noqa: PLC0415 (only on the arm_planner branch)
+
+        request = pyroki_world.PlanReplayRequest(
+            joints_deg=np.asarray(joints_deg, dtype=np.float64), positions=np.asarray(positions, dtype=np.float64)
+        )
+        return self._timed("plan_replay", len(joints_deg), lambda: replay_planner.plan_replay(self.resolver, request))
 
     def tcp_poses(self, joints_deg: np.ndarray) -> np.ndarray:
         """TCP poses along joint configurations, by the NumPy copy of the planner's FK.

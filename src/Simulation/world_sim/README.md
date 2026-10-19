@@ -56,6 +56,14 @@ A browser page to build scenarios and run them:
   (a checkout on the robot; empty = this Mac's billie-onboard). Each machine shows its stage and log
   line live. When they finish you get ▶ play, its report and a per-command table: planner seconds /
   robot time estimate, plus the planner build.
+  **Connect** (next to a robot) keeps a warm planner there.
+  - It syncs once, then starts `plan_server.py` in the robot's `billie` container over one ssh
+    connection (`robot_link.py`). The worker builds the planner once (about 45s on billie-29), and a
+    Run on that robot then goes straight to it: no sync, no warm-up, a few seconds per run.
+  - Only the recordings a scenario replays are synced per run. After changing code, reconnect.
+  - The worker holds GPU memory on the robot, so it ends on Disconnect, when the editor exits or is
+    killed (its input closes), or after an hour without a job (`WORLD_SIM_IDLE_S`).
+  - The hover text shows its log.
   "Also plan without obstacles" (on by default) plans every command a second time with the avoid
   objects removed. It uses the same planner in the same process, so there is no second build. The
   table shows those times in grey under each cell. The difference is what the obstacles cost:
@@ -100,6 +108,10 @@ The planner builds in the background. Editing works before it is ready, using th
 
 - Coordinates are in the xArm base frame, in millimeters, as the arm status shows them. The pose
   rotation is a rotation vector in radians.
+- A command may set `"touch": true` (or `false`): its moves let the fingers touch the room and the
+  objects, 5cm deep for the finger spheres (`billie_utils.arm_touch`, `FINGER_TOUCH_DEPTH_M`). Without it, a
+  `replay_policy` touches (its move to the first frame too) and `joints` / `pose` never
+  touch, as on the robot (the AI and replay_policy touch, stage 1).
 - An object with `"frame": "map"` is placed in the map instead: points are `[x, y, z above the floor]`
   and `yaw_deg` is from the map +X. Such objects need
   `"billie": {"pose": [x_mm, y_mm, yaw_deg], "arm_to_base": [x_mm, y_mm, yaw_deg]}`
@@ -108,7 +120,14 @@ The planner builds in the background. Editing works before it is ready, using th
   Objects without `frame` stay in the arm frame and move with Billie. `top_height_mm` / `height_mm` are above the floor; the
   floor is 440.5mm below the arm base.
 - `avoid` objects go to the planner, the arm-move guard, detours and reroutes. Together they must
-  fit in the planner's 32 capsule slots. A table uses about `width / thickness` capsules.
+  fit in the planner's capsule slots (`MAX_WORLD_CAPSULES`: 32 on `arm_planner`, 8 on `arm_plan_esdf`).
+  A table uses about `width / thickness` capsules.
+- `"map"` (`arm_plan_esdf` only): the mapper's baked ESDF the planner plans against as the room, e.g.
+  `"output/world_sim/maps/office-2-20261006-free12/esdf_grid.esdfbin"` (path from the repo root; needs
+  `"billie"`). The arm is a set of spheres fitted to its collision meshes (`arm_spheres.py`); objects stay
+  capsules next to it (moving obstacles: a drawer, a door). The editor draws the map's surface voxels
+  around Billie (room map field under Billie, colored by height) and counts the room in the arm's
+  clearance colors; robot runs copy the map file to the robot.
 - A table or wall may set `"spacing_mm"`: the distance between neighbouring capsule centers (radius =
   thickness / 2). Without it the robot's builders choose: a wall every 1.2 radii (overlapping), a
   table every 2 radii (touching). A larger spacing uses fewer capsules but leaves holes of
@@ -135,7 +154,7 @@ The planner builds in the background. Editing works before it is ready, using th
 
 | Robot | Here |
 |---|---|
-| pyroki planner node (`plan`, `batch_plan`, `poc_plan_transit`, obstacles) | `planner.py`, the same `IKResolver` and transit planner in-process |
+| pyroki planner node (`plan`, `batch_plan`, `plan_move`, `plan_replay`, obstacles) | `planner.py`, the same `IKResolver` and transit planner in-process |
 | brain `set_state_with_arm_joints` + detour, `pose`, `joints`, `replay_policy`, BufferingPlayer, reroute | `commands.py`, `reroute.py` (ports, keep in sync) |
 | xarm_writer queue + arm-move guard | `sim_arm.py`, the real `arm_motion_guard_poc` |
 
@@ -151,8 +170,45 @@ by 35mm.
   an object while the planner model reads clear, with the link and depth.
 - A box warns when the planner used the gripper's bounding-box fallback (its gripper mesh was
   missing), because that box misses the camera bracket.
-- A pose the planner solved away from its target is marked "not reached (X mm, Y°)" instead of
-  "ok". The planner never refuses: its world cost is soft, so it returns its best compromise.
+
+## Did it reach the target, and did Billie say so
+
+Billie refuses moves in the brain: the arm-move guard, "no detour found", "no route found" in a
+replay reroute, and the replay's final-position check. The IK solver itself always returns its best
+joints. Nothing on the robot checks:
+- a `pose` command's IK result, against its target;
+- the replay frames on the way;
+- a pose replay's last frame below `final_position_threshold` (50mm).
+
+A target inside the robot base silently leaves the arm where it is.
+
+So every command in a run gets a check (`analysis.target_checks`):
+
+| Verdict | Meaning |
+|---|---|
+| reached | Every pose target within 5mm / 2° |
+| failed | The command failed with an error: Billie reported it |
+| **silent miss** | It finished, but a target was missed by more than 5mm / 2°. Billie reports success. For replays: how many frames, the worst, and the last |
+| **stayed put** | A pose inside the robot base: the arm did not move, and Billie reports success |
+| not checked | No pose target (`joints`, replays in joints mode) |
+
+The report puts silent misses in a red box at the top and in the result column. The editor marks
+them ⚠ in the commands list and the run panel, and counts them per machine in the run view. The sim
+writes three notes the robot never sends (target inside the base, the IK error, a replay's large
+motion). They are greyed and marked "simulation note" and never count as Billie having reported
+anything.
+
+## Close to collision
+
+"Safe" is the planner's own clearance, 20mm (`WORLD_COL_MARGIN_M`). `near_collision.py` finds every
+stretch of the path, within one command, where some link comes closer than that to an avoid
+object, by the planner's capsule or the real mesh, whichever is closer.
+- **Report:** a "Close to collision" table (command, targets, closest distance, which model, link,
+  object, both minima). Orange (closer than safe) or magenta (inside) bands on the Timeline. A
+  marker in the 3D scene from the closest arm point to the object.
+- **Editor playback:** the same bands under the play bar. The TCP path is colored blue / orange /
+  magenta. A marker sits at each zone's closest point, and clicking it, or the zone in the run panel,
+  jumps there.
 
 ## Doors and handles
 
@@ -171,6 +227,38 @@ dashed. The PyBullet viewer draws doors and handles at 0°.
 
 The arm reaches each target instantly (no controller dynamics, no timing). Gripper, `thing`, brain
 commands inside recordings, and the `map` / `pointcloud` / `gripper` replay transforms are not simulated.
+
+## A robot's live occupancy map
+
+```bash
+python -m Simulation.world_sim.occupancy_view --host bellboy@billie-07.bellboy   # or --file <occupancy.bin.gz>
+```
+
+Copies the mapper's live `occupancy.bin.gz` and camera path from the robot (read only) to
+`output/world_sim/occupancy/<robot>/`, prints the cell count and the floor height (it should be near z = 0), and
+opens a 3D page: occupied cells colored by height above the floor, the camera path in red. `--no-floor` hides the
+floor, `--zmax` hides what is higher.
+
+### The planner's room field
+
+```bash
+python -m Simulation.world_sim.esdf_view --host bellboy@billie-07.bellboy        # the robot's live occupancy
+python -m Simulation.world_sim.esdf_view --file <occupancy.bin.gz> --at x,y
+python -m Simulation.world_sim.esdf_view --esdf <esdf_grid.esdfbin> --at x,y      # a baked map
+```
+
+Builds the crop around the arm base the way spatial_awareness does for the planner (occupancy_field.build_field:
+2.5cm, holes filled, box rule capped at 20cm; Billie's base not cleared, no AutoXing walls), or cuts a baked map's
+crop, and opens `esdf_3d.html`: the room's cells as cubes colored by height, with the 5cm and 10cm keep-out shells and
+the never-observed cells switchable in the legend, and Billie itself: its base, arm and gripper from the planner's
+own URDF (base + the robot's arm, from `~/releases/env/*/urdf/<XARM_SN>.urdf`) at the robot's joints, placed as the
+planner places the arm (AutoXing pose, `ARM_TO_BASE_CALIBRATION`, the arm base height). It also prints where the map's
+floor is around Billie and what arm base height a flat floor at its wheels would mean; `--on-floor` draws Billie
+standing on that floor, `--height` sets the height. Billie needs `robot.json`, which the mapper writes from
+arm_plan_esdf on (with the last frame's pose and joints). `esdf_slices.html` has horizontal slices with a height slider and
+vertical x-z slices with a y slider: black is occupied, the color is the distance (cm), grey is never observed (the
+planner counts it as free). The red x is the arm base (default: the robot's last camera position; `--at` sets it, `--height` its height, `--uncapped` drops the
+cap).
 
 ## Timing on a robot (Jetson GPU)
 

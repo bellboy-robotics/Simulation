@@ -1,7 +1,7 @@
 """World editor: a browser page to place Billie on the map, put objects around it, pick the joints and
 poses to test, and run them through the planner.
 
-    python -m Simulation.world_sim.editor [post_across_path.json] [--robot bellboy@billie-29.bellboy ...]
+    python -m Simulation.world_sim.editor [post_across_path.json] [--robot bellboy@billie-12.bellboy ...]
 
 The page (editor.html) is served by this process, which reuses the plan and view steps:
 - Billie is drawn from the planner's merged URDF; clearance comes from the planner's collision model
@@ -30,16 +30,27 @@ from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
-from billie_utils.messages.pyroki_world_poc import DEFAULT_ARM_BASE_HEIGHT_M, MAX_WORLD_CAPSULES, WORLD_COL_MARGIN_M
-from billie_utils.world_collision_check_poc import CollisionModel, link_obstacle_distances, link_transforms
+from billie_utils.messages.pyroki_world import DEFAULT_ARM_BASE_HEIGHT_M, MAX_WORLD_CAPSULES, WORLD_COL_MARGIN_M
+from billie_utils.arm_collision_model import CollisionModel, link_obstacle_distances, link_transforms
 from scipy.spatial.transform import Rotation
 
-from Simulation.world_sim import robot, runs
-from Simulation.world_sim.analysis import EEF_LINKS, Run, dense_path, link_distances, load_run, planner_gripper_box
+from Simulation.world_sim import robot, robot_link, runs
+from Simulation.world_sim.analysis import (
+    EEF_LINKS,
+    Run,
+    dense_path,
+    link_distances,
+    load_run,
+    planner_gripper_box,
+    target_checks,
+    target_errors,
+)
 from Simulation.world_sim.mesh_check import EXACT_WITHIN_M, link_mesh_distances, urdf_path
 from Simulation.world_sim.randomize import random_motions, random_objects
+from Simulation.world_sim.near_collision import SAFE_MM, near_zones
 from Simulation.world_sim.pushables import push_events, simulate_pushes
 from Simulation.world_sim.world import PUSHABLE_TYPES, hinge_of, object_capsules, scenario_from_data
+from Simulation.world_sim.frames import map_from_arm
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 EDITOR_HTML = os.path.join(_HERE, "editor.html")
@@ -52,6 +63,12 @@ DEFAULT_PORT = 8765
 _DECIMALS = 4
 # Scenario file names the page may read or write: one plain name inside SCENARIOS_DIR.
 _FILE_NAME = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
+# The Simulation repo root: scenario map paths are relative to it.
+_REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+# Surface voxels sent to the page for drawing a room map, at most (subsampled evenly beyond).
+_MAP_POINTS_MAX = 60000
+# A voxel counts as surface for drawing when its distance is within this many voxels of zero.
+_MAP_SURFACE_VOXELS = 0.75
 
 
 class EditorState:
@@ -344,9 +361,104 @@ def forward_kinematics(state: EditorState, body: dict) -> dict:
         error = f"{type(e).__name__}: {e}"
     clearance = np.where(model.movable_links[None], clearance, np.inf) * 1000.0
     mesh, mesh_object = mesh_clearance(model, joints, objects)
+    names = [o[0] for o in objects]
+    try:
+        room = room_clearance(model, joints, body.get("scenario") or {})
+    except (KeyError, ValueError, OSError) as e:
+        room, error = None, f"room map: {type(e).__name__}: {e}"
+    if room is not None:  # the room counts like one more object, "room map"
+        clearance = np.minimum(clearance, room[0] * 1000.0)
+        closer = room[1] * 1000.0 < mesh
+        mesh, mesh_object = np.where(closer, room[1] * 1000.0, mesh), np.where(closer, len(names), mesh_object)
+        names.append("room map")
     return {"poses": poses, "tcp": tcp.round(_DECIMALS), "clearance_mm": _mm_rows(clearance), "mesh_clearance_mm": _mm_rows(mesh),
-            "summary": clearance_summary(model, clearance, mesh, mesh_object, [o[0] for o in objects]),
+            "summary": clearance_summary(model, clearance, mesh, mesh_object, names),
             "error": error}  # fmt: skip
+
+
+# Room maps loaded so far: absolute path -> (EsdfGrid for the planner's spheres, OfficeMap for the real meshes).
+_room_maps: dict[str, tuple] = {}
+# The planner's room spheres, built once when the editor has no planner of its own (esdf_world not configured).
+_spheres_cache: list = []
+
+
+def _room_map(path: str) -> tuple:
+    """A room map, loaded on first use.
+
+    path: The scenario's "map" (relative to the repo root, or absolute).
+    Returns: (billie_utils EsdfGrid, office_map OfficeMap) of that file.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from billie_utils.esdf_grid import load_esdf_grid  # noqa: PLC0415
+
+    from Simulation.world_sim.office_map import load_office_map  # noqa: PLC0415
+
+    full = path if os.path.isabs(path) else os.path.join(_REPO_ROOT, path)
+    if full not in _room_maps:
+        _room_maps[full] = (load_esdf_grid(Path(full)), load_office_map(Path(full)))
+    return _room_maps[full]
+
+
+def _room_spheres(model: CollisionModel):
+    """The planner's room spheres (arm_spheres): the planner's own when it is built, else fitted here once.
+
+    model: The arm model. Returns: The SphereSet.
+    """
+    from pyroki_planner import arm_spheres, esdf_world  # noqa: PLC0415
+    from pyroki_planner.urdf import load_urdf  # noqa: PLC0415
+
+    try:
+        return esdf_world.current_spheres()
+    except RuntimeError:
+        if not _spheres_cache:
+            _spheres_cache.append(arm_spheres.arm_sphere_set(load_urdf(), model))
+        return _spheres_cache[0]
+
+
+def room_clearance(model: CollisionModel, joints_deg: np.ndarray, scenario: dict) -> tuple[np.ndarray, np.ndarray] | None:
+    """How close every link is to the scenario's room map: the planner's spheres and the real meshes.
+
+    model: The arm model. joints_deg: (S, 6) degrees. scenario: The edited scenario (its "map" and "billie").
+    Returns: ((S, L) planner-sphere clearance, (S, L) real-mesh clearance), meters, +inf for links without
+        geometry and where only unobserved space is near; None when the scenario has no map.
+    """
+    from pyroki_planner import esdf_world  # noqa: PLC0415
+
+    from Simulation.world_sim import map_judge  # noqa: PLC0415
+    from Simulation.world_sim.mesh_check import mesh_points  # noqa: PLC0415
+
+    if not scenario.get("map") or not scenario.get("billie"):
+        return None
+    grid, office = _room_map(scenario["map"])
+    floor_z_m = scenario.get("floor_z_mm", -DEFAULT_ARM_BASE_HEIGHT_M * 1000.0) / 1000.0
+    T = map_from_arm(scenario["billie"], -floor_z_m)
+    planner = esdf_world.esdf_link_clearances_np(model, joints_deg, grid, T, _room_spheres(model))
+    by_mesh, names = map_judge.mesh_clearance(office, model, joints_deg, T, mesh_points())
+    mesh = np.full(planner.shape, np.inf)
+    for k, name in enumerate(names):
+        if name in model.link_names:
+            mesh[:, model.link_names.index(name)] = np.where(np.isnan(by_mesh[:, k]), np.inf, by_mesh[:, k])
+    return planner, mesh
+
+
+def map_points(state: EditorState, query: dict) -> dict:
+    """The surface voxels of a room map around Billie, for drawing (what the planner plans against).
+
+    state: Unused. query: {"map": the scenario's map path, "x_mm", "y_mm": Billie on the map,
+        "radius_m": how far around Billie (default 2.5)}.
+    Returns: {"points": flat [x, y, z, ...] map meters (z above the floor), "voxel_m", "count", "total"}.
+    """
+    grid, _ = _room_map(query["map"])
+    voxel = grid.voxel_size_m
+    index = np.argwhere(np.isfinite(grid.distances_m) & (np.abs(grid.distances_m) <= voxel * _MAP_SURFACE_VOXELS))
+    points = grid.origin_m + index * voxel
+    center = np.array([float(query["x_mm"]), float(query["y_mm"])]) / 1000.0
+    points = points[np.linalg.norm(points[:, :2] - center, axis=1) <= float(query.get("radius_m", 2.5))]
+    total = len(points)
+    if total > _MAP_POINTS_MAX:
+        points = points[:: int(np.ceil(total / _MAP_POINTS_MAX))]
+    return {"points": points.round(3).ravel().tolist(), "voxel_m": voxel, "count": len(points), "total": total}
 
 
 def solve_ik(state: EditorState, body: dict) -> dict:
@@ -360,7 +472,8 @@ def solve_ik(state: EditorState, body: dict) -> dict:
     world = scenario_from_data(body["scenario"], "editor")["world"]
     pose = np.asarray(body["pose"], dtype=np.float64)
     with state.lock:
-        planner.set_obstacles(*world.capsules("avoid"))
+        planner.set_obstacles(*world.capsules("avoid"), floor_z_m=world.floor_z_m)
+        planner.set_room(world.room, -world.floor_z_m)
         solution, base_collision = planner.solve(np.asarray(body["joints"], dtype=np.float64), pose)
     reached = planner.tcp_poses(solution[None])[0]
     error_mm = float(np.linalg.norm(reached[:3] - pose[:3]))
@@ -377,17 +490,10 @@ def plan_locally(state: EditorState, scenario_data: dict, flags: dict) -> dict:
     Raises: RuntimeError while the planner is not ready.
     """
     planner = state.require_planner()
-    from Simulation.world_sim.plan import run_scenario, run_without_obstacles  # noqa: PLC0415 (imports JAX)
+    from Simulation.world_sim.plan import plan_scenario  # noqa: PLC0415 (imports JAX)
 
-    scenario = scenario_from_data(scenario_data, "editor")
-    args = (planner, scenario["world"], scenario["start_joints_deg"], scenario["commands"])
-    options = {"continue_on_block": bool(flags.get("continue_on_block")), "stop_on_error": not flags.get("keep_going")}
     with state.lock:
-        results = run_scenario(*args, **options)
-        if flags.get("compare_no_obstacles"):
-            results["no_obstacles"] = run_without_obstacles(*args, **options)
-    results["name"] = scenario["name"]
-    return results
+        return plan_scenario(planner, scenario_data, flags, "editor")
 
 
 def start_run(state: EditorState, body: dict) -> dict:
@@ -442,6 +548,27 @@ def clean_history(state: EditorState, _body: dict) -> dict:
     return {"deleted": runs.delete_finished_runs()}
 
 
+def connect_robot(state: EditorState, body: dict) -> dict:
+    """Connects to a robot: syncs, then keeps a warm planner worker there for its runs (robot_link.py).
+
+    state: Unused. body: {"host": ssh destination, "robot_checkout": planner code checkout on the robot ("" = local)}.
+    Returns: {"robots": every connection's status}.
+    """
+    robot_link.connect(body["host"], body.get("robot_checkout", robot.DEFAULT_ROBOT_CHECKOUT))
+    return {"robots": robot_link.statuses()}
+
+
+def disconnect_robot(state: EditorState, body: dict) -> dict:
+    """Stops a robot's planner worker. state: Unused. body: {"host"}. Returns: {"robots": statuses}."""
+    robot_link.disconnect(body["host"])
+    return {"robots": robot_link.statuses()}
+
+
+def robot_statuses(state: EditorState, _query: dict) -> dict:
+    """The connected robots' states for the page. state, _query: Unused. Returns: {"robots": statuses}."""
+    return {"robots": robot_link.statuses()}
+
+
 def run_playback(state: EditorState, query: dict) -> dict:
     """The arm path of one machine of a run, for the page's player.
 
@@ -477,9 +604,12 @@ def playback(run: Run) -> dict:
         1 inside the planner margin / 2 inside an avoid object, the worse of the planner capsule and the
         real mesh (mesh_check), "summary": (S,) see clearance_summary, "tcp_mm": (S, 3), "owner": (S,)
         target index per sample (-1 = start), "targets": per target {"command", "kind", "blocked"},
-        "commands": per command {"cmd", "ok", "error", "seconds"}, "events": operator messages,
+        "commands": per command {"cmd", "ok", "error", "seconds", "check": analysis.target_checks' row (did it
+        reach its targets; "silent miss" = finished off target, which Billie reports as success)}, "events":
+        operator messages ("sim_only" ones the robot does not send),
         "warnings": run-level notes like the report's (planner gripper box, real-mesh contacts it reads clear,
-        blocked pushes), "pushes": see _playback_pushes}.
+        blocked pushes), "pushes": see _playback_pushes, "near_zones": where the arm is closer than "safe_mm"
+        to an avoid object (near_collision.near_zones)}.
     """
     samples, owner = dense_path(run)
     distance = link_distances(run, samples, "avoid") * 1000.0
@@ -498,6 +628,9 @@ def playback(run: Run) -> dict:
     link_state = np.where(worst < 0, 2, np.where(worst < WORLD_COL_MARGIN_M * 1000.0, 1, 0))
     poses, tcp = arm_poses(run.model, samples)
     pushes, push_warnings = _playback_pushes(run, owner)
+    zones = near_zones(run.model, samples, owner, run.command, distance, mesh, avoid)
+    checks = target_checks(run, *target_errors(run))
+    warnings += [f"cmd {c + 1}: {k['text']}" for c, k in enumerate(checks) if k["verdict"] in ("silent miss", "stayed put")]
     return {
         "joints_deg": samples.round(2),
         "poses": poses,
@@ -507,11 +640,13 @@ def playback(run: Run) -> dict:
         "tcp_mm": tcp[:, :3].round(1),
         "owner": owner,
         "targets": [{"command": int(c), "kind": k, "blocked": b} for c, k, b in zip(run.command, run.kind, run.blocked)],
-        "commands": [{"cmd": c["spec"]["cmd"], "ok": c["ok"], "error": c["error"], "seconds": round(c["seconds"], 2)}
-                     for c in run.commands],  # fmt: skip
+        "commands": [{"cmd": c["spec"]["cmd"], "ok": c["ok"], "error": c["error"], "seconds": round(c["seconds"], 2),
+                      "check": k} for c, k in zip(run.commands, checks)],  # fmt: skip
         "events": run.events,
         "warnings": warnings + push_warnings,
         "pushes": pushes,
+        "near_zones": zones,
+        "safe_mm": SAFE_MM,
     }
 
 
@@ -615,8 +750,12 @@ _ROUTES: dict[tuple[str, str], Callable[[EditorState, dict], dict]] = {
     ("GET", "/api/runs"): run_history,
     ("POST", "/api/runs/delete"): delete_run,
     ("POST", "/api/runs/clean"): clean_history,
+    ("POST", "/api/robot/connect"): connect_robot,
+    ("POST", "/api/robot/disconnect"): disconnect_robot,
+    ("GET", "/api/robots"): robot_statuses,
     ("GET", "/api/playback"): run_playback,
     ("POST", "/api/random"): random_content,
+    ("GET", "/api/map"): map_points,
 }
 
 
@@ -736,6 +875,8 @@ def main() -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        robot_link.disconnect_all()  # the robots' workers end with their connections
 
 
 if __name__ == "__main__":

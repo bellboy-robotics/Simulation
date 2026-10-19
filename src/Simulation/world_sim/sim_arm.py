@@ -8,7 +8,10 @@ robot's arm ends once its queue empties.
 from dataclasses import dataclass
 
 import numpy as np
-from billie_utils import arm_motion_guard_poc
+from billie_utils import arm_motion_guard
+
+# [deg/s] The brain's DEFAULT_ARM_SPEED (billie-17 runs at 80): the fastest joint's speed of a single move.
+DEFAULT_ARM_SPEED_DEG_S = 80.0
 
 
 @dataclass
@@ -20,6 +23,8 @@ class TrajectoryPoint:
     kind: str  # what produced it, e.g. "joints", "pose", "detour", "replay", "reroute"
     target_pose: np.ndarray | None  # (6,) TCP pose the planner was asked for [mm, rad], if any
     blocked: str | None  # the guard's refusal message, if the guard refused it (continue_on_block only)
+    speed_deg_s: float = DEFAULT_ARM_SPEED_DEG_S  # the fastest joint's speed of the move into it
+    subdivide: bool = False  # True if xarm_writer splits the move's steps that are too fast for the tool
 
 
 class SimArm:
@@ -37,12 +42,18 @@ class SimArm:
         self.continue_on_block = continue_on_block
         self.points: list[TrajectoryPoint] = []
         self.command = -1  # set by the runner before each command
-        arm_motion_guard_poc.set_current_joints_provider(lambda: self.joints_deg)
-        arm_motion_guard_poc._last_target_deg = None
-        arm_motion_guard_poc._queued_targets.clear()
+        arm_motion_guard.set_current_joints_provider(lambda: self.joints_deg)
+        arm_motion_guard._last_target_deg = None
+        arm_motion_guard._queued_targets.clear()
 
     def enqueue(
-        self, joints_deg: np.ndarray, clear_queue: bool, kind: str, target_pose: np.ndarray | None = None
+        self,
+        joints_deg: np.ndarray,
+        clear_queue: bool,
+        kind: str,
+        target_pose: np.ndarray | None = None,
+        speed_deg_s: float = DEFAULT_ARM_SPEED_DEG_S,
+        subdivide: bool = False,
     ) -> None:
         """Sends one joint target through the guard, like xarm_writer.enqueue_joints.
 
@@ -51,16 +62,18 @@ class SimArm:
             trajectory (starts from the previous target and is also checked for joint spins).
         kind: Label of what produced the move, for the viewer and the report.
         target_pose: (6,) TCP pose the planner was asked for, if this target came from IK.
+        speed_deg_s: The fastest joint's speed of the move, degrees per second.
+        subdivide: True if xarm_writer splits the move's steps that are too fast for the tool.
         Raises: ArmMoveBlockedError if the guard refuses the move and continue_on_block is False.
         """
         target = np.asarray(joints_deg, dtype=np.float64)[:6]
         blocked = None
         try:
-            arm_motion_guard_poc.check_move(target, clear_queue)
-        except arm_motion_guard_poc.ArmMoveBlockedError as e:
+            arm_motion_guard.check_move(target, clear_queue)
+        except arm_motion_guard.ArmMoveBlockedError as e:
             if not self.continue_on_block:
                 raise
             blocked = str(e)
-            arm_motion_guard_poc._last_target_deg = target
-        self.points.append(TrajectoryPoint(target, self.command, kind, target_pose, blocked))
+            arm_motion_guard._last_target_deg = target
+        self.points.append(TrajectoryPoint(target, self.command, kind, target_pose, blocked, speed_deg_s, subdivide))
         self.joints_deg = target

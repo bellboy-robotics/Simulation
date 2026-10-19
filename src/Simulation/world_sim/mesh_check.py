@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 import trimesh
 import yourdfpy
-from billie_utils.world_collision_check_poc import CollisionModel, link_transforms
+from billie_utils.arm_collision_model import CollisionModel, link_transforms
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CACHE_DIR = os.path.abspath(os.path.join(_HERE, "..", "..", "..", "output", "world_sim"))

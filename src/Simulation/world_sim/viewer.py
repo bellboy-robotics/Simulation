@@ -9,7 +9,7 @@ import time
 
 import numpy as np
 import pybullet as p
-from billie_utils.messages.pyroki_world_poc import WORLD_COL_MARGIN_M
+from billie_utils.messages.pyroki_world import WORLD_COL_MARGIN_M
 
 from Simulation.ik_sim.pybullet_sim import set_pybullet
 from Simulation.world_sim.analysis import Run, dense_path, link_distances
