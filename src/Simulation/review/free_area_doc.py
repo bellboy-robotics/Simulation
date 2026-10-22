@@ -107,9 +107,9 @@ SYSTEM_WIDE = [
         "Deploy both together",
     ),
     (
-        "WALL now means lidar returns on a mapped wall; a mapped wall with no returns reads FREE",
+        "WALL now means lidar returns on a mapped wall, within 25 cm of it (<code>WALL_DILATE_PX</code> 2 → 5 px); a mapped wall with no returns reads FREE",
         "Every caller of <code>is_area_free</code> / <code>is_area_free_instant</code>",
-        "Fewer false WALLs from map noise and shifted walls; a real wall offset from the map reads OCCUPIED",
+        "Fewer false WALLs from map noise. A wall up to 25 cm off the map reads WALL (billie-08's were 15–25 cm off); a real object within 25 cm of a mapped wall now also reads WALL: the 0.2 m stop distance with no approach margin instead of 0.5 m plus the margin. To recheck in v3",
     ),
     (
         "<code>OrchestratorNode.upload_image()</code> gained <code>privacy_safe</code>: uploads even in strict privacy",
@@ -256,8 +256,8 @@ CHARTS = [
   F -. "yes: no checks" .-> LEG
   LEG["per leg: <b>wait_for_current_coordinates()</b> · a new request_id ·<br/>nav_slide/slide · chart 13"]:::bChg
   LEG --> W{{"wait?"}}:::bDec
-  W -- "no, checked" --> WU["<b>watch_unwaited_move()</b> (area_check.py) until its own nav_slide/done,<br/><b>_done_of()</b> by request_id; a hit cancels and reports<br/><b>optional_background_wait()</b>: returns once moving, or on that done"]:::bNew
-  W -- "yes" --> MON["<b>monitored_move()</b> + live check · chart 8: the distance still ahead,<br/><b>_leg_area_ahead()</b> · <b>_leg_left_m()</b> from the live pose<br/><b>optional_background_wait()</b> (event_wait.py) → on_slide_done"]:::bNew
+  W -- "no" --> WU["checked only: <b>watch_unwaited_move()</b> (area_check.py) until its own nav_slide/done,<br/><b>_done_of()</b> by request_id; a hit cancels and reports<br/><b>optional_background_wait()</b>: returns once moving, or on that done"]:::bNew
+  W -- "yes" --> MON["<b>monitored_move()</b>: cancels the slide if the wait fails ·<br/>checked only: + live check · chart 8, the distance still ahead,<br/><b>_leg_area_ahead()</b> · <b>_leg_left_m()</b> from the live pose<br/><b>optional_background_wait()</b> (event_wait.py) → on_slide_done"]:::bNew
   MON -- "done" --> OK[["slid: the distance travelled is reported"]]:::ok
   MON -- "no movement / timeout" --> X2[["«class» SlideNoMovementError · «class» SlideTimeoutError<br/>with the distance travelled"]]:::stop
   MON -- "live check stop · chart 8" --> CAN["nav_slide/cancel · this leg's done: node.last, else<br/><b>wait_for_event_via_handler()</b> (sent after the leg) · measure how far it got<br/>at a wall, under 0.2 m to go → ends OK, says how far"]:::bNew
@@ -282,9 +282,9 @@ CHARTS = [
   W{{"wait?"}}:::bDec
   W -- "no" --> NW["one request, <b>request_rotate()</b> · then, checked: <b>watch_unwaited_move()</b><br/>until this request's nav_twist/response; a hit sends cancel_rotate<br/>(a wall too: nothing tracks the turn, so it stops with an error)"]:::bChg
   W -- "yes" --> LEG["per leg: «data» RotateRequest → nav_twist/rotate · chart 13<br/>tick: _sample_rotation() sums the turned degrees"]:::bChg
-  LEG --> MON["<b>monitored_move()</b> + live check · chart 8: the arc still left,<br/><b>_leg_sweep_left()</b> · <b>_leg_left_deg()</b> from the live pose<br/><b>wait_for_event_via_handler()</b> nav_twist/response"]:::bNew
+  LEG --> MON["<b>monitored_move()</b>: cancels the rotation if the wait fails ·<br/>checked only: + live check · chart 8, the arc still left,<br/><b>_leg_sweep_left()</b> · <b>_leg_left_deg()</b> from the live pose<br/><b>wait_for_event_via_handler()</b> nav_twist/response"]:::bNew
   MON -- "response" --> OK[["rotated"]]:::ok
-  MON -- "live check stop · chart 8" --> CAN["nav_twist/cancel_rotate · the response from node.last, else waited for ·<br/>degrees left, or the same absolute heading<br/>at a wall, under 0.2 m of arc left → ends OK"]:::bNew
+  MON -- "live check stop · chart 8" --> CAN["nav_twist/cancel_rotate · the response from node.last, else waited for ·<br/>a fresh pose (<b>autoxing.wait_for_pose()</b>), then degrees left,<br/>or the same absolute heading<br/>at a wall, under 0.2 m of arc left → ends OK"]:::bNew
   CAN -- "otherwise" --> P["<b>_pause_and_await_resume()</b> · chart 9<br/>on the arc left, from where it stopped"]:::bNew
   P -- "resumed: a new leg" --> LEG
   P -- "cancelled" --> X[["«class» PausedMoveCancelledError"]]:::stop
@@ -300,13 +300,13 @@ CHARTS = [
   A(["twist command · Flow"]):::trig --> T["<b>twist()</b> · brain/navigation/_nav.py<br/><b>_validate_direction()</b> · <b>_resolve_force()</b>"]:::bChg
   T --> F{{"force?"}}:::bDec
   F -- "no" --> AR["<b>_twist_area()</b> · brain/navigation/_nav.py<br/>left / right: a full circle, <b>_twist_rotation_points()</b><br/>forward / backward: 0.5 m ahead of the live pose, <b>_slide_swept_points()</b>"]:::bNew
-  AR --> PRE["read before moving: <b>_check_before_move()</b> · room left: start slow ·<br/>no room, a wall too (no known distance): pause, chart 9<br/>wait=False: <b>watch_unwaited_move()</b> until its own nav_twist/done, <b>_done_of()</b>"]:::bNew
+  AR --> PRE["read before moving: <b>_check_before_move()</b> · room left: start slow ·<br/>no room, a wall too (no known distance): pause, chart 9"]:::bNew
   F -. "yes: no checks" .-> LEGS
   PRE --> LEGS["<b>_run_twist_legs()</b> · brain/navigation/_nav.py · shared with chart 6"]:::bNew
-  LEGS --> MON["<b>monitored_move()</b> · live check on the area (wait=True) · chart 8"]:::bNew
-  MON --> RL["one leg: <b>send_twist()</b> with the request_id → nav_twist/twist · chart 13<br/>twist_sent() · <b>optional_background_wait()</b> nav_twist/done"]:::bChg
+  LEGS --> MON["<b>monitored_move()</b>: cancels the twist if the wait fails ·<br/>checked and wait=True only: + live check on the area · chart 8"]:::bNew
+  MON --> RL["one leg, its own request_id: wait=False → <b>watch_unwaited_move()</b><br/>until that leg's done (<b>_done_of()</b>) · <b>send_twist()</b> → nav_twist/twist · chart 13<br/>twist_sent() · <b>optional_background_wait()</b> nav_twist/done"]:::bChg
   RL -- "done" --> OK[["twisted"]]:::ok
-  MON -- "live check stop · chart 8" --> CS["twist sent? <b>_completed_steps_of_cancelled_twist()</b>:<br/>completed_steps from nav_twist/done · not sent: 0 steps, no wait"]:::bNew
+  MON -- "live check stop · chart 8" --> CS["twist sent? <b>_completed_steps_of_cancelled_twist()</b>:<br/>completed_steps from this leg's own done (request_id) ·<br/>not sent: 0 steps, no wait"]:::bNew
   CS -- "steps left" --> P["<b>_pause_and_await_resume()</b> · chart 9"]:::bNew
   P -- "resumed: only the steps left" --> LEGS
   P -- "cancelled" --> X[["«class» PausedMoveCancelledError"]]:::stop
@@ -325,7 +325,7 @@ CHARTS = [
   F -. "yes: no checks" .-> WARM
   AR --> WARM["the arm's pose · warm the IK solver"]:::bOld
   WARM --> LEGS["<b>_run_twist_legs()</b> · chart 5<br/>live check unless force · the pause and resume of chart 9"]:::bNew
-  LEGS --> RL["one leg: capture the fixed-eef reference again ·<br/><b>send_twist()</b> · twist_sent() · compensate the arm until nav_twist/done"]:::bChg
+  LEGS --> RL["one leg: capture the fixed-eef reference again ·<br/><b>send_twist()</b> with the leg's request_id · twist_sent() ·<br/>compensate the arm until its own done, predicting<br/>step by step at the capped speed"]:::bChg
   RL -- "done" --> OK[["twisted, end-effector held"]]:::ok
   RL -- "the arm fails" --> X[["cancel the twist · the command fails"]]:::stop
 """,
@@ -346,9 +346,9 @@ CHARTS = [
   PRE -- "no room otherwise" --> P
   PRE -- "room left" --> L["<b>_install_live_area_check()</b> · chart 8<br/>the same 1.2 m corridor, <b>_corridor_ahead()</b>, re-read<br/>from the live pose, with its unpadded path ·<br/>route left: <b>_route_left_m()</b>, the path length"]:::bNew
   F -. "yes" .-> RUN
-  L --> RUN["<b>monitored_move()</b> → follow_route to the rust_host actor<br/>slowed by the actor's set_speed_cap<br/>a wall, under 0.2 m of route left: «class» _StoppedAtWall → ends OK"]:::bChg
+  L --> RUN["<b>SpeedGovernor.resend()</b>: the actor cleared its cap at the last run's end ·<br/><b>monitored_move()</b> → follow_route to the rust_host actor<br/>slowed by the actor's set_speed_cap<br/>a wall, under 0.2 m of route left: «class» _StoppedAtWall → ends OK"]:::bChg
   RUN -- "the actor reports the end" --> OK[["route done, or failed with the actor's error"]]:::ok
-  RUN -- "any other stop: «class» BlindRouteAreaNotFreeError" --> P["cancel the run · <b>_pause_and_await_resume()</b> · chart 9 (posts the image)<br/><b>_completed_description()</b> · <b>_remaining_description()</b> →<br/><b>_distance_to_final_waypoint()</b>"]:::bNew
+  RUN -- "any other stop: «class» BlindRouteAreaNotFreeError" --> P["cancel the run · <b>_pause_and_await_resume()</b> · chart 9 (posts the image)<br/>on the corridor and path the check stopped on (blocked_path)<br/><b>_completed_description()</b> · <b>_remaining_description()</b> →<br/><b>_distance_to_final_waypoint()</b>"]:::bNew
   P -- "resumed: the same route again" --> RUN
   P -- "cancelled" --> X[["«class» PausedMoveCancelledError"]]:::stop
 """,
