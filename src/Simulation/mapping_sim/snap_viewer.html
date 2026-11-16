@@ -1,0 +1,258 @@
+<title>Scan Snap Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a control rail beside one large 3D stage; the rail stacks above the stage on phones. */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --fg: #17202a; --muted: #5d6b78; --line: #d8dee5; --accent: #0b6e8a;
+  --c-clear: #d81b8c; --c-gripper: #ef8a17; --c-hidden: #4f6fa8; --c-far: #b59a12; --c-outside: #9aa5b1;
+  --c-occupied: #c62828; --stage: #eef1f4;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #93a1ae; --line: #2a343e; --accent: #4cc3e0;
+  --c-clear: #ff4fb8; --c-gripper: #ffa53d; --c-hidden: #7e9bd6; --c-far: #e0c23a; --c-outside: #5f6b77;
+  --c-occupied: #ff5a4f; --stage: #131a20; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #93a1ae; --line: #2a343e; --accent: #4cc3e0;
+  --c-clear: #ff4fb8; --c-gripper: #ffa53d; --c-hidden: #7e9bd6; --c-far: #e0c23a; --c-outside: #5f6b77;
+  --c-occupied: #ff5a4f; --stage: #131a20; color-scheme: dark }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-display); padding-inline: 16px; padding-block: 14px; box-sizing: border-box; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 12px; }
+h1 { font-size: 1.25rem; font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+.meta b { font-family: var(--f-mono); font-weight: 500; color: var(--fg); }
+.layout { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 14px; height: calc(100% - 52px); min-height: 520px; }
+.rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-y: auto; }
+.block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.snaps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.snaps button { font: 500 0.82rem var(--f-display); padding: 7px 4px; border-radius: 6px; border: 1px solid var(--line);
+  background: transparent; color: var(--fg); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.snaps button small { font: 400 0.68rem var(--f-mono); color: var(--muted); }
+.snaps button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.snaps button[aria-pressed="true"] small { color: var(--panel); }
+.snaps button:focus-visible, .toggle input:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.joints { font: 400 0.72rem var(--f-mono); color: var(--muted); overflow-wrap: anywhere; }
+.toggle { display: grid; grid-template-columns: 16px 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.86rem; cursor: pointer; }
+.swatch { width: 12px; height: 12px; border-radius: 3px; }
+.count { font: 500 0.8rem var(--f-mono); font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.bar span { display: block; height: 100%; }
+.note { font-size: 0.8rem; color: var(--muted); line-height: 1.45; margin: 0; }
+.range { display: flex; align-items: center; gap: 10px; }
+.range input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.range output { font: 500 0.8rem var(--f-mono); min-width: 52px; text-align: right; }
+.stage { background: var(--stage); border: 1px solid var(--line); border-radius: 8px; min-width: 0; min-height: 420px; position: relative; overflow: hidden; }
+#plot { position: absolute; inset: 0; }
+#loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 0.9rem; }
+@media (max-width: 760px) {
+  .layout { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .stage { height: 70vh; }
+  .rail { overflow: visible; }
+}
+</style>
+
+<header>
+  <h1>Scan Snap Viewer</h1>
+  <span class="meta" id="meta"></span>
+</header>
+<div class="layout">
+  <aside class="rail">
+    <section class="block" aria-labelledby="snap-label">
+      <span class="label" id="snap-label">Snap</span>
+      <div class="snaps" id="snaps" role="group" aria-label="Choose a snap"></div>
+      <div class="joints" id="joints"></div>
+    </section>
+    <section class="block" aria-labelledby="cells-label">
+      <span class="label" id="cells-label">Unknown cells this snap covers</span>
+      <div class="bar" id="bar" aria-hidden="true"></div>
+      <div id="toggles"></div>
+      <p class="note" id="explain"></p>
+    </section>
+    <section class="block" aria-labelledby="view-label">
+      <span class="label" id="view-label">Display</span>
+      <label class="toggle"><input type="checkbox" id="show-occupied" checked><span class="swatch" style="background: var(--c-occupied)"></span><span>Occupied (real map)</span><span class="count" id="occupied-count"></span></label>
+      <label class="toggle"><input type="checkbox" id="show-cameras" checked><span class="swatch" style="background: var(--accent)"></span><span>Cameras and base</span><span></span></label>
+      <div class="range"><label for="top">Height up to</label><input type="range" id="top" min="5" max="200" step="5" value="200"><output id="top-out" for="top"></output></div>
+      <div class="range"><label for="size">Point size</label><input type="range" id="size" min="1" max="6" step="0.5" value="2.5"><output id="size-out" for="size"></output></div>
+    </section>
+  </aside>
+  <main class="stage">
+    <div id="plot"></div>
+    <div id="loading">Loading the 3D view…</div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.34.0/plotly.min.js"></script>
+<script>
+const DATA = /*DATA*/null;
+
+// What each stored class means on the page, its color token, and whether it shows at first.
+const KINDS = [
+  { key: "never in view", name: "Outside this snap's view", token: "--c-outside", on: false, opacity: 0.12,
+    note: "Unknown cells this snap never pointed at." },
+  { key: "free", name: "In clear view, still unknown", token: "--c-clear", on: true, opacity: 0.9,
+    note: "The snap had a clear line to these cells, yet the real map left them unknown: the rules here do not explain it (depth holes, block allocation)." },
+  { key: "behind the gripper mask", name: "Behind the gripper mask", token: "--c-gripper", on: true, opacity: 0.75,
+    note: "Their pixels fall in the mapper's gripper mask (the gripper's own box, 9% of every image), so the ray gives nothing." },
+  { key: "hidden behind something", name: "Hidden behind an object", token: "--c-hidden", on: true, opacity: 0.55,
+    note: "An object stands between the camera and them: unknown is correct." },
+  { key: "past the far-pixel meter", name: "Past the far-pixel limit", token: "--c-far", on: true, opacity: 0.7,
+    note: "Their ray hit nothing within 5 m and they lie past the part of it the mapper clears." },
+];
+
+function decode(text, Type) {
+  // Base64 bytes as a typed array (little-endian, as the exporter wrote them).
+  const bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  return new Type(bytes.buffer);
+}
+
+function token(name) {
+  // A CSS color token's current value (follows the viewer's theme).
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+const unknown = decode(DATA.unknown, Int16Array);
+const occupied = decode(DATA.occupied, Int16Array);
+const codes = DATA.snaps.map((s) => decode(s.codes, Uint8Array));
+const ALL = DATA.snaps.length;  // the "All" button's index
+// Over all snaps, the most useful thing any snap did to a cell: clear view, then gripper, hidden, far, outside.
+const RANK = [4, 0, 1, 2, 3];
+const allCodes = new Uint8Array(unknown.length / 3).map((_, i) => {
+  let best = 0;
+  for (const c of codes) if (RANK[c[i]] < RANK[best]) best = c[i];
+  return best;
+});
+const state = { snap: 0, kinds: KINDS.map((k) => k.on), top: 200, size: 2.5, occupied: true, cameras: true };
+
+function points(source, keep) {
+  // The x, y, z lists (m) of the cells keep() accepts, under the height limit.
+  const x = [], y = [], z = [];
+  for (let i = 0; i < source.length / 3; i++) {
+    if (source[3 * i + 2] > state.top || !keep(i)) continue;
+    x.push(source[3 * i] / 100); y.push(source[3 * i + 1] / 100); z.push(source[3 * i + 2] / 100);
+  }
+  return { x, y, z };
+}
+
+function cameraTraces() {
+  // Billie's base box, every snap's camera, and the chosen snap's view pyramid.
+  const [hx, hy, hz] = DATA.base_half_m;
+  const bx = [-hx, hx, hx, -hx, -hx, null, -hx, hx, hx, -hx, -hx];
+  const by = [-hy, -hy, hy, hy, -hy, null, -hy, -hy, hy, hy, -hy];
+  const bz = [0, 0, 0, 0, 0, null, hz, hz, hz, hz, hz];
+  for (const [cx, cy] of [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]]) { bx.push(null, cx, cx); by.push(null, cy, cy); bz.push(null, 0, hz); }
+  const traces = [{ type: "scatter3d", mode: "lines", x: bx, y: by, z: bz, name: "Billie's base",
+    line: { color: token("--muted"), width: 3 }, hoverinfo: "name" }];
+  traces.push({ type: "scatter3d", mode: "markers+text", name: "Snaps",
+    x: DATA.snaps.map((s) => s.at[0]), y: DATA.snaps.map((s) => s.at[1]), z: DATA.snaps.map((s) => s.at[2]),
+    text: DATA.snaps.map((s) => s.name), textfont: { color: token("--fg"), size: 10 }, textposition: "top center",
+    marker: { size: 4, color: DATA.snaps.map((_, i) => (i === state.snap ? token("--accent") : token("--muted"))) },
+    hoverinfo: "text" });
+  const chosen = state.snap === ALL ? DATA.snaps : [DATA.snaps[state.snap]];
+  const fx = [], fy = [], fz = [];
+  for (const s of chosen) {
+    const c = s.corners;
+    for (const k of [0, 1, 2, 3]) { fx.push(s.at[0], c[k][0], null); fy.push(s.at[1], c[k][1], null); fz.push(s.at[2], c[k][2], null); }
+    for (const k of [0, 1, 2, 3, 0]) { fx.push(c[k][0]); fy.push(c[k][1]); fz.push(c[k][2]); }
+    fx.push(null); fy.push(null); fz.push(null);
+  }
+  traces.push({ type: "scatter3d", mode: "lines", x: fx, y: fy, z: fz, name: "View", hoverinfo: "skip",
+    line: { color: token("--accent"), width: 4 } });
+  return traces;
+}
+
+function traces() {
+  // Every visible layer for the chosen snap.
+  const snapCodes = state.snap === ALL ? allCodes : codes[state.snap];
+  const out = [];
+  KINDS.forEach((kind, k) => {
+    if (!state.kinds[k]) return;
+    const p = points(unknown, (i) => snapCodes[i] === k);
+    out.push({ type: "scatter3d", mode: "markers", name: kind.name, ...p, hoverinfo: "name",
+      marker: { size: state.size, color: token(kind.token), opacity: kind.opacity, line: { width: 0 } } });
+  });
+  if (state.occupied) {
+    out.push({ type: "scatter3d", mode: "markers", name: "Occupied", ...points(occupied, () => true), hoverinfo: "name",
+      marker: { size: state.size * 0.8, color: token("--c-occupied"), opacity: 0.85, line: { width: 0 } } });
+  }
+  if (state.cameras) out.push(...cameraTraces());
+  return out;
+}
+
+function layout() {
+  // The 3D scene in meters, Billie's frame, keeping the viewer's camera across redraws.
+  const axis = (title) => ({ title: { text: title, font: { size: 11, color: token("--muted") } }, color: token("--muted"),
+    gridcolor: token("--line"), zerolinecolor: token("--line"), backgroundcolor: token("--stage"), showbackground: true });
+  return { uirevision: "keep", showlegend: false, margin: { l: 0, r: 0, t: 0, b: 0 }, paper_bgcolor: token("--stage"),
+    scene: { aspectmode: "data", xaxis: axis("x forward (m)"), yaxis: axis("y left (m)"), zaxis: axis("z up (m)"),
+      camera: { eye: { x: -1.4, y: -1.2, z: 1.0 } } } };
+}
+
+function renderRail() {
+  // The snap buttons, the class toggles with this snap's counts, and the share bar.
+  const snapCodes = state.snap === ALL ? allCodes : codes[state.snap];
+  const counts = KINDS.map(() => 0);
+  for (const c of snapCodes) counts[c]++;
+  const covered = counts.reduce((a, b) => a + b, 0) - counts[0];
+  const buttons = document.getElementById("snaps");
+  buttons.querySelectorAll("button").forEach((b, i) => b.setAttribute("aria-pressed", String(i === state.snap)));
+  const snap = DATA.snaps[state.snap];
+  document.getElementById("joints").textContent = state.snap === ALL
+    ? `${ALL} snaps; outside = no snap pointed at it`
+    : `joints ° ${snap.joints.join(", ")}`;
+  document.getElementById("toggles").innerHTML = KINDS.map((kind, k) =>
+    `<label class="toggle"><input type="checkbox" id="kind-${k}" ${state.kinds[k] ? "checked" : ""}>` +
+    `<span class="swatch" style="background: var(${kind.token})"></span><span>${kind.name}</span>` +
+    `<span class="count">${counts[k].toLocaleString()}</span></label>`).join("");
+  KINDS.forEach((_, k) => document.getElementById(`kind-${k}`).addEventListener("change", (e) => { state.kinds[k] = e.target.checked; draw(); }));
+  document.getElementById("bar").innerHTML = KINDS.slice(1).map((kind, j) =>
+    `<span style="width: ${covered ? (100 * counts[j + 1]) / covered : 0}%; background: var(${kind.token})"></span>`).join("");
+  const clear = covered ? Math.round((100 * counts[1]) / covered) : 0;
+  const gripper = covered ? Math.round((100 * counts[2]) / covered) : 0;
+  document.getElementById("explain").textContent =
+    `${covered.toLocaleString()} unknown ${DATA.cell_cm} cm cells in view: ${gripper}% behind the gripper mask, ${clear}% in clear view. ` +
+    KINDS[1].note;
+}
+
+function draw() {
+  // Redraws the plot and the rail for the current state.
+  Plotly.react("plot", traces(), layout(), { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] });
+  renderRail();
+}
+
+function start() {
+  // Builds the snap buttons and display controls, then draws.
+  const total = DATA.snaps.reduce((a, s) => a + s.frames, 0);
+  document.getElementById("meta").innerHTML =
+    `${DATA.robot} · <b>${(unknown.length / 3).toLocaleString()}</b> unknown cells of ${DATA.cell_cm} cm · <b>${total}</b> mapper frames over ${ALL} snaps`;
+  const buttons = document.getElementById("snaps");
+  [...DATA.snaps.map((s) => [s.name.replace("View ", "V"), `${s.frames} fr`]), ["All", "union"]].forEach(([label, sub], i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.id = `snap-${i}`;
+    b.innerHTML = `${label}<small>${sub}</small>`;
+    b.addEventListener("click", () => { state.snap = i; draw(); });
+    buttons.appendChild(b);
+  });
+  document.getElementById("occupied-count").textContent = (occupied.length / 3).toLocaleString();
+  const bind = (id, out, set, fmt) => {
+    const input = document.getElementById(id);
+    const show = () => { document.getElementById(out).textContent = fmt(input.value); };
+    input.addEventListener("input", () => { set(Number(input.value)); show(); draw(); });
+    show();
+  };
+  bind("top", "top-out", (v) => { state.top = v; }, (v) => `${(v / 100).toFixed(2)} m`);
+  bind("size", "size-out", (v) => { state.size = v; }, (v) => `${v} px`);
+  document.getElementById("show-occupied").addEventListener("change", (e) => { state.occupied = e.target.checked; draw(); });
+  document.getElementById("show-cameras").addEventListener("change", (e) => { state.cameras = e.target.checked; draw(); });
+  document.getElementById("loading").hidden = true;
+  draw();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+}
+
+if (window.Plotly) start();
+else document.getElementById("loading").textContent = "The 3D library did not load; reload the page.";
+</script>

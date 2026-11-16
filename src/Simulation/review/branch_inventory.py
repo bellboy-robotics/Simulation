@@ -54,14 +54,15 @@ def definitions(source: str) -> dict[str, tuple[str, str]]:
     return out
 
 
-def changed_definitions(repo: str, base: str) -> list[dict]:
-    """The definitions added, changed or removed since base, in the repo's billie/ folder.
+def changed_definitions(repo: str, base: str, subdir: str = "billie") -> list[dict]:
+    """The definitions added, changed or removed since base, in the repo's subdir folder.
 
     repo: Path of the git checkout. base: Commit to compare with (the merge-base with main).
+    subdir: Folder (relative to repo) to scan; "billie" for billie-onboard, "." for a repo with no such layout.
     Returns: [{"file", "name", "kind", "status"}], status "new", "changed" or "removed".
     """
-    files = _git(repo, "diff", "--name-only", base, "--", "billie").stdout.split()
-    files += _git(repo, "ls-files", "--others", "--exclude-standard", "billie").stdout.split()
+    files = _git(repo, "diff", "--name-only", base, "--", subdir).stdout.split()
+    files += _git(repo, "ls-files", "--others", "--exclude-standard", subdir).stdout.split()
     rows = []
     for path in sorted({f for f in files if f.endswith(".py")}):
         old_source = _git(repo, "show", f"{base}:{path}")
@@ -120,13 +121,14 @@ def _refers_to(source: _Source, row: dict) -> bool:
     return source.imported.get(simple, stem) == stem
 
 
-def add_docs_and_callers(rows: list[dict], repo: str) -> None:
+def add_docs_and_callers(rows: list[dict], repo: str, subdir: str = "billie") -> None:
     """Adds "doc" (first docstring line), "used_by" (["file::function"], tests left out) and "tests" (count).
 
     rows: Inventory rows, changed in place. repo: Path of the git checkout.
+    subdir: Folder (relative to repo) whose files are searched for callers; see changed_definitions().
     """
     sources: dict[str, _Source] = {}
-    for path in glob.glob(os.path.join(repo, "billie", "**", "*.py"), recursive=True):
+    for path in glob.glob(os.path.join(repo, subdir, "**", "*.py"), recursive=True):
         if any(skip in path for skip in _SKIP_DIRS):
             continue
         try:
@@ -161,11 +163,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--repo", required=True, help="git checkout to review (e.g. billie-onboard)")
     parser.add_argument("--base", help="commit to compare with; default: the merge-base with origin/main")
+    parser.add_argument("--subdir", default="billie", help="folder to scan, relative to --repo (default: billie)")
     parser.add_argument("--out", required=True, help="inventory JSON file to write")
     args = parser.parse_args()
     base = args.base or _git(args.repo, "merge-base", "HEAD", "origin/main").stdout.strip()
-    rows = changed_definitions(args.repo, base)
-    add_docs_and_callers(rows, args.repo)
+    rows = changed_definitions(args.repo, base, args.subdir)
+    add_docs_and_callers(rows, args.repo, args.subdir)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as f:
         json.dump({"base": base, "rows": rows}, f, indent=1)

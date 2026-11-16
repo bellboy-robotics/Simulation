@@ -1,0 +1,357 @@
+<title>Scan Coverage Cases</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a control rail beside one large 3D stage; the rail stacks above the stage on phones. */
+:root {
+  --bg: #f3f5f7; --panel: #ffffff; --fg: #17202a; --muted: #5d6b78; --line: #d8dee5; --accent: #0b6e8a;
+  --c-clear: #d81b8c; --c-gripper: #ef8a17; --c-hidden: #4f6fa8; --c-far: #b59a12; --c-outside: #9aa5b1;
+  --c-seen: #2f80c2; --c-rim: #2e9e6b; --c-zone: #7fbf5a; --c-body: #8a6a3f;
+  --c-occupied: #c62828; --stage: #eef1f4;
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #93a1ae; --line: #2a343e; --accent: #4cc3e0;
+  --c-clear: #ff4fb8; --c-gripper: #ffa53d; --c-hidden: #7e9bd6; --c-far: #e0c23a; --c-outside: #5f6b77;
+  --c-seen: #5aa9e6; --c-rim: #4cc98f; --c-zone: #9bd67a; --c-body: #c79a5e;
+  --c-occupied: #ff5a4f; --stage: #131a20; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f1419; --panel: #171e25; --fg: #e3e9ef; --muted: #93a1ae; --line: #2a343e; --accent: #4cc3e0;
+  --c-clear: #ff4fb8; --c-gripper: #ffa53d; --c-hidden: #7e9bd6; --c-far: #e0c23a; --c-outside: #5f6b77;
+  --c-seen: #5aa9e6; --c-rim: #4cc98f; --c-zone: #9bd67a; --c-body: #c79a5e;
+  --c-occupied: #ff5a4f; --stage: #131a20; color-scheme: dark }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--f-display); padding-inline: 16px; padding-block: 14px; box-sizing: border-box; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 12px; }
+h1 { font-size: 1.25rem; font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.meta { color: var(--muted); font-size: 0.85rem; }
+.meta b { font-family: var(--f-mono); font-weight: 500; color: var(--fg); }
+.layout { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr); gap: 14px; height: calc(100% - 52px); min-height: 520px; }
+.rail { display: flex; flex-direction: column; gap: 14px; min-width: 0; overflow-y: auto; }
+.block { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.snaps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.snaps.views { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.pick { font: 500 0.86rem var(--f-display); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stats { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; font-size: 0.86rem; margin: 0; }
+.stats dt { color: var(--muted); }
+.stats dd { margin: 0; font: 500 0.86rem var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.stats dd.big { font-size: 1.15rem; color: var(--c-clear); }
+.snaps button { font: 500 0.82rem var(--f-display); padding: 7px 4px; border-radius: 6px; border: 1px solid var(--line);
+  background: transparent; color: var(--fg); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.snaps button small { font: 400 0.68rem var(--f-mono); color: var(--muted); }
+.snaps button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.snaps button[aria-pressed="true"] small { color: var(--panel); }
+.snaps button:focus-visible, .toggle input:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.joints { font: 400 0.72rem var(--f-mono); color: var(--muted); overflow-wrap: anywhere; }
+.toggle { display: grid; grid-template-columns: 16px 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 0.86rem; cursor: pointer; }
+.swatch { width: 12px; height: 12px; border-radius: 3px; }
+.count { font: 500 0.8rem var(--f-mono); font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.bar span { display: block; height: 100%; }
+.note { font-size: 0.8rem; color: var(--muted); line-height: 1.45; margin: 0; }
+.range { display: flex; align-items: center; gap: 10px; }
+.range input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.range output { font: 500 0.8rem var(--f-mono); min-width: 52px; text-align: right; }
+.stage { background: var(--stage); border: 1px solid var(--line); border-radius: 8px; min-width: 0; min-height: 420px; position: relative; overflow: hidden; }
+#plot { position: absolute; inset: 0; }
+#loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 0.9rem; }
+@media (max-width: 760px) {
+  .layout { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .stage { height: 70vh; }
+  .rail { overflow: visible; }
+}
+</style>
+
+<header>
+  <h1>Scan Coverage Cases</h1>
+  <span class="meta" id="meta"></span>
+</header>
+<div class="layout">
+  <aside class="rail">
+    <section class="block" aria-labelledby="room-label">
+      <span class="label" id="room-label">Room</span>
+      <div class="snaps" id="rooms" role="group" aria-label="Choose a room"></div>
+    </section>
+    <section class="block" aria-labelledby="case-label">
+      <span class="label" id="case-label">Scan case</span>
+      <div class="snaps" id="cases" role="group" aria-label="Choose a scan case"></div>
+      <dl class="stats">
+        <dt>Unknown in front of Billie, within the arm's reach</dt><dd class="big" id="stat-front"></dd>
+        <dt>Camera alone, before the rules</dt><dd id="stat-camera"></dd>
+        <dt>Unknown in the whole arm's reach</dt><dd id="stat-reach"></dd>
+        <dt>Arm past the base column</dt><dd id="stat-column"></dd>
+      </dl>
+      <label class="label" for="compare">Compare with</label>
+      <select id="compare" class="pick"></select>
+      <p class="note" id="compare-note" hidden></p>
+      <span class="label" id="views-label">View (what one view sees)</span>
+      <div class="snaps views" id="views" role="group" aria-label="Choose a view of the case"></div>
+      <div class="joints" id="joints"></div>
+    </section>
+    <section class="block" aria-labelledby="cells-label">
+      <span class="label" id="cells-label">Cells after the scan</span>
+      <div id="toggles"></div>
+      <p class="note">Simulated: a fresh map from the case's views in this room, the mapper's rules, then spatial_awareness's probably-free rules. The lidar is left out; on a robot its low band adds to this.</p>
+    </section>
+    <section class="block" aria-labelledby="view-label">
+      <span class="label" id="view-label">Display</span>
+      <label class="toggle"><input type="checkbox" id="front-only" checked><span class="swatch" style="background: var(--muted)"></span><span>In front of Billie only (ahead of its centre, the dashed line; any distance)</span><span></span></label>
+      <label class="toggle"><input type="checkbox" id="reach-only" checked><span class="swatch" style="background: var(--muted)"></span><span>Arm's reach only (0.9 m from the arm base)</span><span></span></label>
+      <label class="toggle"><input type="checkbox" id="show-occupied" checked><span class="swatch" style="background: var(--c-occupied)"></span><span>Occupied (real map)</span><span></span></label>
+      <label class="toggle"><input type="checkbox" id="show-cameras" checked><span class="swatch" style="background: var(--accent)"></span><span>Views and base</span><span></span></label>
+      <div class="range"><label for="top">Height up to</label><input type="range" id="top" min="5" max="200" step="5" value="200"><output id="top-out" for="top"></output></div>
+      <div class="range"><label for="size">Point size</label><input type="range" id="size" min="1" max="6" step="0.5" value="3"><output id="size-out" for="size"></output></div>
+      <p class="note" id="limits"></p>
+    </section>
+  </aside>
+  <main class="stage">
+    <div id="plot"></div>
+    <div id="loading">Loading the 3D view…</div>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.34.0/plotly.min.js"></script>
+<script>
+const DATA = /*DATA*/null;
+
+// How each stored kind is drawn, and whether it shows at first (the unknown ones do).
+const STYLE = [
+  { token: "--c-seen", on: false, opacity: 0.45 },
+  { token: "--c-rim", on: false, opacity: 0.35 },
+  { token: "--c-zone", on: false, opacity: 0.3 },
+  { token: "--c-outside", on: true, opacity: 0.8 },
+  { token: "--c-body", on: true, opacity: 0.85 },
+  { token: "--c-hidden", on: true, opacity: 0.8 },
+  { token: "--c-gripper", on: true, opacity: 0.85 },
+];
+
+function decode(text, Type) {
+  // Base64 bytes as a typed array (little-endian, as the exporter wrote them).
+  const bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  return new Type(bytes.buffer);
+}
+
+function token(name) {
+  // A CSS color token's current value (follows the viewer's theme).
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+const ROOMS = DATA.rooms.map((room) => ({
+  name: room.name, cells: decode(room.cells, Int16Array), flags: decode(room.flags, Uint8Array),
+  occupied: decode(room.occupied, Int16Array),
+  cases: room.cases.map((c) => ({ ...c, codes: decode(c.codes, Uint8Array), seenBy: decode(c.seen_by, Uint8Array) })),
+}));
+// view: -1 for all the case's views together, else one view's index. compare: -1, or the case compared with.
+const state = { room: 0, scan: 1, view: -1, compare: -1, kinds: STYLE.map((k) => k.on), top: 200, size: 3, occupied: true,
+  cameras: true, front: true, reach: true };
+
+function shown(room, i) {
+  // Whether a cell passes the front / reach / height filters. The two are separate: "in front" is ahead of Billie's
+  // centre at any distance (the cells are in Billie's frame, cm); "reach" is within the arm's reach.
+  if (room.cells[3 * i + 2] > state.top) return false;
+  if (state.front && room.cells[3 * i] <= DATA.front_from_x_m * 100) return false;
+  return !(state.reach && !(room.flags[i] & 2));
+}
+
+function points(source, keep) {
+  // The x, y, z lists (m) of the cells keep() accepts.
+  const x = [], y = [], z = [];
+  for (let i = 0; i < source.length / 3; i++) {
+    if (!keep(i)) continue;
+    x.push(source[3 * i] / 100); y.push(source[3 * i + 1] / 100); z.push(source[3 * i + 2] / 100);
+  }
+  return { x, y, z };
+}
+
+function kindOf(scan, i) {
+  // A cell's kind for the display. With one view picked, "seen" means seen by that view alone: a cell that only
+  // the other views saw is left out (-1). The other kinds are the case's end state.
+  const kind = scan.codes[i];
+  if (state.view < 0 || kind !== 0) return kind;
+  return (scan.seenBy[i] >> state.view) & 1 ? 0 : -1;
+}
+
+function cameraTraces(scan) {
+  // Billie's base box and the case's views (camera and view pyramid each).
+  const [hx, hy, hz] = DATA.base_half_m;
+  const bx = [-hx, hx, hx, -hx, -hx, null, -hx, hx, hx, -hx, -hx];
+  const by = [-hy, -hy, hy, hy, -hy, null, -hy, -hy, hy, hy, -hy];
+  const bz = [0, 0, 0, 0, 0, null, hz, hz, hz, hz, hz];
+  for (const [cx, cy] of [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]]) { bx.push(null, cx, cx); by.push(null, cy, cy); bz.push(null, 0, hz); }
+  const traces = [{ type: "scatter3d", mode: "lines", x: bx, y: by, z: bz, name: "Billie's base",
+    line: { color: token("--muted"), width: 3 }, hoverinfo: "name" }];
+  const far = DATA.shown_m, front = DATA.front_from_x_m;
+  traces.push({ type: "scatter3d", mode: "lines", x: [front, front], y: [-far, far], z: [0, 0], name: "In front of Billie from here",
+    line: { color: token("--muted"), width: 4, dash: "dash" }, hoverinfo: "name" });
+  const fx = [], fy = [], fz = [];
+  for (const s of state.view < 0 ? scan.views : [scan.views[state.view]]) {
+    const c = s.corners;
+    for (const k of [0, 1, 2, 3]) { fx.push(s.at[0], c[k][0], null); fy.push(s.at[1], c[k][1], null); fz.push(s.at[2], c[k][2], null); }
+    for (const k of [0, 1, 2, 3, 0]) { fx.push(c[k][0]); fy.push(c[k][1]); fz.push(c[k][2]); }
+    fx.push(null); fy.push(null); fz.push(null);
+  }
+  traces.push({ type: "scatter3d", mode: "lines", x: fx, y: fy, z: fz, name: "Views", hoverinfo: "skip",
+    line: { color: token("--accent"), width: 3 } });
+  return traces;
+}
+
+// The comparison's layers: a cell unknown after this case only, after the other only, or after both.
+const DIFF = [
+  { name: "Unknown after this case only", token: "--c-clear", opacity: 0.9 },
+  { name: "Unknown after the other case only", token: "--c-rim", opacity: 0.9 },
+  { name: "Unknown after both", token: "--c-outside", opacity: 0.35 },
+];
+
+function diffOf(room, i) {
+  // A cell's comparison layer (index into DIFF), or -1 when both cases know it. Kinds 3 and up are unknown.
+  const here = room.cases[state.scan].codes[i] >= 3, there = room.cases[state.compare].codes[i] >= 3;
+  if (here && there) return 2;
+  return here ? 0 : there ? 1 : -1;
+}
+
+function traces() {
+  // Every visible layer for the chosen room and case (or the comparison of two cases).
+  const room = ROOMS[state.room], scan = room.cases[state.scan];
+  const out = [];
+  if (state.compare >= 0) {
+    DIFF.forEach((layer, k) => {
+      const p = points(room.cells, (i) => diffOf(room, i) === k && shown(room, i));
+      out.push({ type: "scatter3d", mode: "markers", name: layer.name, ...p, hoverinfo: "name",
+        marker: { size: state.size, color: token(layer.token), opacity: layer.opacity, line: { width: 0 } } });
+    });
+  }
+  DATA.kinds.forEach((name, k) => {
+    if (state.compare >= 0) return;
+    if (!state.kinds[k]) return;
+    const p = points(room.cells, (i) => kindOf(scan, i) === k && shown(room, i));
+    out.push({ type: "scatter3d", mode: "markers", name, ...p, hoverinfo: "name",
+      marker: { size: state.size, color: token(STYLE[k].token), opacity: STYLE[k].opacity, line: { width: 0 } } });
+  });
+  if (state.occupied) {
+    const p = points(room.occupied, (i) => room.occupied[3 * i + 2] <= state.top);
+    out.push({ type: "scatter3d", mode: "markers", name: "Occupied", ...p, hoverinfo: "name",
+      marker: { size: state.size * 0.7, color: token("--c-occupied"), opacity: 0.7, line: { width: 0 } } });
+  }
+  if (state.cameras) out.push(...cameraTraces(scan));
+  return out;
+}
+
+function layout() {
+  // The 3D scene in meters, Billie's frame, keeping the viewer's camera across redraws.
+  const axis = (title) => ({ title: { text: title, font: { size: 11, color: token("--muted") } }, color: token("--muted"),
+    gridcolor: token("--line"), zerolinecolor: token("--line"), backgroundcolor: token("--stage"), showbackground: true });
+  return { uirevision: "keep", showlegend: false, margin: { l: 0, r: 0, t: 0, b: 0 }, paper_bgcolor: token("--stage"),
+    scene: { aspectmode: "data", xaxis: axis("x forward (m)"), yaxis: axis("y left (m)"), zaxis: axis("z up (m)"),
+      camera: { eye: { x: 1.5, y: -1.3, z: 1.1 } } } };
+}
+
+function percent(share) {
+  // A share as a percentage with one decimal.
+  return `${(100 * share).toFixed(1)}%`;
+}
+
+function renderRail() {
+  // The pressed buttons, the case's numbers and the kind toggles with their counts.
+  const room = ROOMS[state.room], scan = room.cases[state.scan];
+  document.querySelectorAll("#rooms button").forEach((b, i) => b.setAttribute("aria-pressed", String(i === state.room)));
+  document.querySelectorAll("#cases button").forEach((b, i) => b.setAttribute("aria-pressed", String(i === state.scan)));
+  document.getElementById("stat-front").textContent = percent(scan.front_unknown);
+  document.getElementById("stat-camera").textContent = percent(scan.front_camera_only);
+  document.getElementById("stat-reach").textContent = percent(scan.reach_unknown);
+  document.getElementById("stat-column").textContent = `${scan.past_column_cm.toFixed(1)} cm`;
+  document.querySelectorAll("#views button").forEach((b, i) => b.setAttribute("aria-pressed", String(i - 1 === state.view)));
+  document.getElementById("joints").textContent = state.view < 0
+    ? `${scan.views.length} views together; J1 / J5 ° ` + scan.joints.map((q) => `${q[0]} / ${q[4]}`).join(" · ")
+    : `view ${state.view + 1} alone; joints ° ${scan.joints[state.view].join(", ")}`;
+  const note = document.getElementById("compare-note");
+  note.hidden = state.compare < 0;
+  document.getElementById("toggles").hidden = state.compare >= 0;
+  if (state.compare >= 0) {
+    const other = room.cases[state.compare], tally = [0, 0, 0];
+    for (let i = 0; i < scan.codes.length; i++) {
+      const layer = diffOf(room, i);
+      if (layer >= 0 && shown(room, i)) tally[layer]++;
+    }
+    note.innerHTML = `Against <b>${other.name}</b> (${other.note}): front unknown ${percent(other.front_unknown)}, ` +
+      `arm past the column ${other.past_column_cm.toFixed(1)} cm.<br>` +
+      DIFF.map((layer, k) => `<span class="swatch" style="display:inline-block;background:var(${layer.token})"></span> ` +
+        `${layer.name}: <b>${tally[k].toLocaleString()}</b> cells`).join("<br>");
+  }
+  const counts = STYLE.map(() => 0);
+  for (let i = 0; i < scan.codes.length; i++) {
+    const kind = kindOf(scan, i);
+    if (kind >= 0 && shown(room, i)) counts[kind]++;
+  }
+  document.getElementById("toggles").innerHTML = DATA.kinds.map((name, k) =>
+    `<label class="toggle"><input type="checkbox" id="kind-${k}" ${state.kinds[k] ? "checked" : ""}>` +
+    `<span class="swatch" style="background: var(${STYLE[k].token})"></span><span>${kindLabel(name, k)}</span>` +
+    `<span class="count">${counts[k].toLocaleString()}</span></label>`).join("");
+  DATA.kinds.forEach((_, k) => document.getElementById(`kind-${k}`).addEventListener("change", (e) => { state.kinds[k] = e.target.checked; draw(); }));
+}
+
+function kindLabel(name, k) {
+  // A kind's label; the seen kind says whose view it is.
+  if (k !== 0) return `${name[0].toUpperCase()}${name.slice(1)}`;
+  return state.view < 0 ? "Seen by the camera (all the case's views)" : `Seen by view ${state.view + 1} alone`;
+}
+
+function viewButtons() {
+  // The view picker for the chosen case: all its views together, or one.
+  const scan = ROOMS[state.room].cases[state.scan];
+  document.getElementById("views").innerHTML = "";
+  buttons("views", [["All", "together"], ...scan.views.map((_, i) => [`${i + 1}`, `J1 ${scan.joints[i][0]}`])], (i) => { state.view = i - 1; });
+}
+
+function draw() {
+  // Redraws the plot and the rail for the current state.
+  Plotly.react("plot", traces(), layout(), { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] });
+  renderRail();
+}
+
+function buttons(id, items, pick) {
+  // One button per item in a group. id: The group. items: [label, small text]. pick: Called with the index.
+  const group = document.getElementById(id);
+  items.forEach(([label, sub], i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.id = `${id}-${i}`;
+    b.innerHTML = `${label}<small>${sub}</small>`;
+    b.addEventListener("click", () => { pick(i); draw(); });
+    group.appendChild(b);
+  });
+}
+
+function start() {
+  // Builds the room and case buttons and the display controls, then draws.
+  document.getElementById("meta").innerHTML =
+    `cells of <b>${DATA.cell_cm} cm</b> around the arm · numbers at 2.5 cm · in front = ahead of Billie's centre, within the arm's reach`;
+  buttons("rooms", ROOMS.map((r) => [r.name, "its mapped room"]), (i) => { state.room = i; });
+  buttons("cases", ROOMS[0].cases.map((c) => [c.name, c.note]), (i) => { state.scan = i; state.view = -1; viewButtons(); });
+  viewButtons();
+  const compare = document.getElementById("compare");
+  compare.innerHTML = `<option value="-1">Nothing: show this case's cells</option>` +
+    ROOMS[0].cases.map((c, i) => `<option value="${i}">${c.name} (${c.note})</option>`).join("");
+  compare.addEventListener("change", () => { state.compare = Number(compare.value); draw(); });
+  document.getElementById("limits").textContent =
+    `The page holds cells up to ${DATA.shown_m} m from the arm base; the camera sees farther. The view pyramids are drawn 0.5 m long.`;
+  const bind = (id, out, set, fmt) => {
+    const input = document.getElementById(id);
+    const show = () => { document.getElementById(out).textContent = fmt(input.value); };
+    input.addEventListener("input", () => { set(Number(input.value)); show(); draw(); });
+    show();
+  };
+  bind("top", "top-out", (v) => { state.top = v; }, (v) => `${(v / 100).toFixed(2)} m`);
+  bind("size", "size-out", (v) => { state.size = v; }, (v) => `${v} px`);
+  for (const [id, key] of [["show-occupied", "occupied"], ["show-cameras", "cameras"], ["front-only", "front"], ["reach-only", "reach"]]) {
+    document.getElementById(id).addEventListener("change", (e) => { state[key] = e.target.checked; draw(); });
+  }
+  document.getElementById("loading").hidden = true;
+  draw();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
+}
+
+if (window.Plotly) start();
+else document.getElementById("loading").textContent = "The 3D library did not load; reload the page.";
+</script>
