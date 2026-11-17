@@ -1479,6 +1479,14 @@ V2_ITEMS: list[tuple[str, str]] = [
         "guess is too noisy to set it (billie-28: -2.5 and -10 cm in one day).",
     ),
     (
+        "A room fold and a corridor fold",
+        "The fold (<code>ARM_FOLD</code>, used by <code>navigate_poi</code> before every drive) points the camera "
+        "straight down, so after a drive the map has only the floor in front of the base. Hotels want the camera "
+        "down in corridors, so the fold cannot change for everyone. Add a second, room fold that looks ahead and "
+        "down (Rome uses one), used inside rooms. Until then, flows move the arm with <code>joints</code> and drive "
+        "with <code>navigate_poi: fold_arm: false</code>.",
+    ),
+    (
         "Evidence theory for the occupancy cells",
         "The one rule per cell (the mapper section, row 5) is crude: replace it with evidence for occupied and free.",
     ),

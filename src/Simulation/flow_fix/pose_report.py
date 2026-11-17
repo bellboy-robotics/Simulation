@@ -7,8 +7,9 @@ body and to itself, on the planner's own model. For choosing a fold, a look pose
         --pose "look back=-189.12,-55.33,-153.42,3.13,118.14,-178.74" --from "fold=0.96,-13.94,-17.8,-2.59,33.74,-177.23"
 
 Positions are in the arm base frame (x forward, z up, meters). "looks" is the gripper's approach axis, which the
-camera on it follows. "reaches x" is the arm's farthest point behind the arm base (Billie's backpack ends at about
--0.23 m): a pose that reaches further back sticks out behind Billie. Clearances are the planner's self check (distance
+camera on it follows. "reaches x" is the arm's span along Billie (Billie's backpack ends at about -0.23 m behind the
+arm base: a pose that reaches further back sticks out behind Billie); "side" is its farthest point to either side
+(Billie's base is about 0.24 m to each side). Clearances are the planner's self check (distance
 minus its allowance): negative is a refused overlap. --from also checks the straight joints move from each start to
 each pose (joints goals check only Billie's body, so that is the one that counts for them).
 """
@@ -73,10 +74,11 @@ def pose_line(model, check, name: str, joints: np.ndarray) -> str:
         for s in (-model.capsule_height[link] / 2, model.capsule_height[link] / 2):
             ends.append(capsule[:3, 3] + s * capsule[:3, 2])
     tcp = frames[model.link_names.index(TCP_LINK)]
+    ends = np.array(ends)
     (body, body_pair), (arm, arm_pair) = worst_pairs(check, joints)
     return (f"{name:24} tcp {np.round(tcp[:3, 3], 2).tolist()} looks {np.round(tcp[:3, 2], 2).tolist()} "
-            f"reaches x {np.min(np.array(ends)[:, 0]):+.2f} m | body {body * 1000:+.0f} mm ({body_pair}) "
-            f"| arm {arm * 1000:+.0f} mm ({arm_pair})")  # fmt: skip
+            f"reaches x {np.min(ends[:, 0]):+.2f}..{np.max(ends[:, 0]):+.2f} m, side {np.max(np.abs(ends[:, 1])):.2f} m "
+            f"| body {body * 1000:+.0f} mm ({body_pair}) | arm {arm * 1000:+.0f} mm ({arm_pair})")  # fmt: skip
 
 
 def path_line(check, start: tuple[str, np.ndarray], goal: tuple[str, np.ndarray]) -> str:
