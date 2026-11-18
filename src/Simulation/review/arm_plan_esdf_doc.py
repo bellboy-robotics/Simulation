@@ -116,7 +116,7 @@ SYSTEM_WIDE: list[tuple[str, str, str]] = [
     ),
     (
         "<b>replay_policy is planned</b>: untransformed replays with recorded joints go through "
-        "<code>plan_replay</code> (60 s) and raise <i>Replay blocked</i> without a route (chart 9); replay and "
+        "<code>plan_replay</code> (30 s) and raise <i>Replay blocked</i> without a route (chart 9); replay and "
         "AI frames run in <code>arm_touch.touching()</code> (fingers 8 cm into the room), the moves before them "
         "only with <code>pre_action_touch</code>",
         "replay_policy, AI tasks",
@@ -146,8 +146,8 @@ SYSTEM_WIDE: list[tuple[str, str, str]] = [
         "<b>Unrequested arm moves</b>: a move refused while occupancy mapping runs first looks at up to 2 views "
         "at half speed, replans, and may return to the start (chart 3)",
         "Arm commands while occupancy mapping runs",
-        "<b>Medium.</b> The arm moves before refusing; a busy mapper delays the refusal up to 30 s (status "
-        "timeout)",
+        "<b>Medium.</b> The arm moves before refusing; a busy mapper delays the refusal up to 15 s (status "
+        "timeout; the arm goes back to where the move started)",
     ),
     (
         "<b>More requests per arm command</b>: <code>plan_move</code>, and on a refusal "
@@ -201,7 +201,7 @@ SYSTEM_WIDE: list[tuple[str, str, str]] = [
     ),
     (
         "<b>IK and replay waits end</b>: <code>pyroki_node.solve()</code> / <code>batch_solve()</code> and the "
-        "BufferingPlayer give up after 30 s; AI tasks and replays first wait for the planner's compile (up to "
+        "BufferingPlayer give up after 20 s; AI tasks and replays first wait for the planner's compile (up to "
         "10 min) (chart 7, chart 8, chart 9)",
         "Every IK caller; ai_task, replay_policy",
         "<b>Medium.</b> A hung planner fails the step instead of blocking; a first task after a deploy waits",
@@ -371,9 +371,9 @@ AUTHOR_DECISIONS: list[tuple[str, str, str]] = [
         "Measured on 71,768 recorded configurations; a capsule around the platform refused billie-07's fold.",
     ),
     (
-        "<b>An uncheckable pose counts as aligned</b>: with no reference walls in view the pose is "
-        "<code>unchecked</code> and the arm goes on, unless map-frame objects are set",
-        "The room is then placed with a pose nothing checked",
+        "<b>An uncheckable pose counts as aligned</b>: when the scan cannot be aligned to any reference map at all "
+        "the pose is <code>unchecked</code> and the arm goes on, unless map-frame objects are set",
+        "The room is then placed with a pose nothing checked; a lost robot counts too (v2 item 10)",
         "No evidence the pose is off either (2026-11-08).",
     ),
 ]
@@ -508,7 +508,7 @@ SUMMARIES: dict[int, str] = {
     "the unknown notice.",
     9: "On main recordings played as recorded. Now the move to the first frame is planned (chart 2, touching only "
     "with <code>pre_action_touch</code>); untransformed replays with recorded joints go through "
-    "<code>plan_replay</code> (60 s): blocked stretches rerouted, refused if a route is blocked (alignment "
+    "<code>plan_replay</code> (30 s): blocked stretches rerouted, refused if a route is blocked (alignment "
     "refusals wait first, chart 3); pose frames solved 50 at a time (chart 7). <code>direct_action</code> drops "
     "the room.",
     10: "New. <code>set_obstacles</code> hands objects to spatial_awareness, which keeps map-frame ones in the map. "
@@ -899,7 +899,7 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   style TOP fill:none,stroke:none
 """,
         [
-            "<code>pyroki_node.solve()</code> and <code>batch_solve()</code> give up after 30 s "
+            "<code>pyroki_node.solve()</code> and <code>batch_solve()</code> give up after 20 s "
             "(<code>SOLVE_TIMEOUT_S</code>) with an error; so does the replay's BufferingPlayer.",
         ],
     ),
@@ -918,7 +918,7 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   RUN --> PRE["before the action: the move to starting_joints · chart 2.1<br/>inside <b>arm_touch.touching(pre_action_touch)</b> · off: 2 cm, never deeper"]:::bChg
   PRE --> ACT["the action, in <b>_Attempt.run()</b>: inside arm_touch.touching(),<br/>fingers 8 cm, gripper body 2 cm · each Gr00t chunk one pose at a time<br/>(<b>_Attempt._request_pyroki_translation()</b>) or, with the GPU, whole (<b>_Attempt._presolve_batch()</b>)"]:::bChg
   ACT --> DA["the whole attempt inside <b>arm_direct.directly(direct_action)</b>:<br/>on, the planner sees no room, objects or floor"]:::bChg
-  DA == "plan · batch_plan · 30 s · chart 7" ==> SOL["the planner solves the frames · chart 7"]:::pChg
+  DA == "plan · batch_plan · 20 s · chart 7" ==> SOL["the planner solves the frames · chart 7"]:::pChg
   SOL == "reply" ==> WT["<b>_Attempt._planner_wait_ended()</b>: the wait is taken out of the duration<br/>(<b>_Attempt._check_task_timeout()</b>) · moves cut short by never-seen cells:<br/><b>unknown_notice.notify_batch()</b>, once per command"]:::bNew
   WT --> Q["each frame queued without a plan · chart 2.2"]:::ref
   Q --> REV["after the attempt, if it failed or with verify_reverse: the reverse playback<br/>inside the touch scope of pre_action_touch: a single move to its first frame<br/>(chart 2.1), then the frames straight to xarm_writer's player"]:::bChg
@@ -936,7 +936,7 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   IS --> RR["<b>reroute_around_obstacles()</b><br/>play/replay_reroute.py · inside the touch and direct scopes<br/>shortened by never-seen cells: the notice (chart 8)"]:::bNew
   RR --> HJ{{"transform poses or joints, and every frame has recorded joints?"}}:::bDec
   HJ -- "no" --> AS["played as recorded"]:::ok
-  HJ -- "yes: always planned" --> PR["<b>plan_replay()</b><br/>messages/pyroki_world.py · touch passed along · 60 s"]:::uNew
+  HJ -- "yes: always planned" --> PR["<b>plan_replay()</b><br/>messages/pyroki_world.py · touch passed along · 30 s"]:::uNew
   PR == "plan_replay · «data» PlanReplayRequest" ==> OPR["<b>on_plan_replay()</b><br/>replay_planner.py · the room fetched first · chart 4.1<br/>the checks after the plan · chart 4.2"]:::pNew
   OPR --> RER["<b>reroute_recording()</b><br/>replay_planner.py"]:::pNew
   RER --> CLR["<b>_clearances()</b> → <b>_distances()</b><br/>room · objects · floor + the arm itself, start rule"]:::pNew
@@ -947,7 +947,7 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   RO -- "a route blocked" --> BL["REPLAY_BLOCKED → ArmMoveBlockedError<br/>refused only for the alignment: wait for it first · chart 3.1"]:::stop
   UN --> TR{{"transform?"}}:::bDec
   RTD --> TR
-  TR -- "poses" --> PP["<b>BufferingPlayer.run()</b> (from arm.replay_poses_batch()): 50 frames<br/>at a time · batch_plan · chart 7 · no answer in 30 s → error"]:::bChg
+  TR -- "poses" --> PP["<b>BufferingPlayer.run()</b> (from arm.replay_poses_batch()): 50 frames<br/>at a time · batch_plan · chart 7 · no answer in 20 s → error"]:::bChg
   TR -- "joints" --> PJ["<b>arm.replay_joints_batch()</b>: the recorded joints,<br/>with the routes spliced in"]:::bChg
 """,
         [],
@@ -1067,8 +1067,9 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   SCN --> IS["<b>initial_scan()</b><br/>behaviours/active_mapping.py"]:::bNew
   IS --> V["6 views in front of Billie, <b>_view()</b>: J1 ±30° and 0,<br/>J5 28° down or 10° up from SCAN_POSE_DEG<br/><b>set_smooth_joints()</b> at SCAN_ARM_SPEED (half) · planned · chart 2"]:::bNew
   V -- "refused" --> SK["the view skipped, a warning"]:::stop
-  V -- "moved" --> WF["<b>_wait_for_frames()</b>: <b>mapper.get_status()</b> (30 s timeout)<br/>until 3 new frames, ≤ 3 s (VIEW_TIMEOUT_S)"]:::bNew
+  V -- "moved" --> WF["<b>_wait_for_frames()</b>: <b>mapper.get_status()</b> (15 s timeout)<br/>until 3 new frames, ≤ 3 s (VIEW_TIMEOUT_S)"]:::bNew
   WF --> BK["back to where the arm was (refused → stays at the last view)<br/><b>_send_scan_result()</b>: views reached, views mapped, the buttons"]:::ok
+  WF -- "no status in 15 s" --> TO["<b>_move_back()</b>: back to where the arm was, then the TimeoutError"]:::stop
   SU --> SUN["<b>scan_unknown()</b> · commands/mapping_3d.py<br/>the cells that last blocked a move: <b>unknown_notice.last_blocked()</b><br/>none, or no occupancy frames → a warning"]:::bNew
   SUN --> WP2["the same wait for the planner"]:::bNew
   WP2 --> SV["the planner aims up to 6 views at them (plan_look, as in chart 3.2)<br/>taken one by one at half speed, waiting for frames · the arm back"]:::bNew
@@ -1076,7 +1077,9 @@ CHARTS: list[tuple[int, str, str, str, str, list[str]]] = [
   style TOP fill:none,stroke:none
 """,
         [
-            "An abort stops the scan like any command (<code>InterruptedError</code>).",
+            "An abort stops the scan like any command (<code>InterruptedError</code>), the arm where it is. A mapper "
+            "status that does not come back (<code>TimeoutError</code>) moves the arm back first, in the scan and "
+            "in a look (<code>_back_to_start()</code>, chart 3).",
         ],
     ),
     (
@@ -1489,6 +1492,31 @@ V2_ITEMS: list[tuple[str, str]] = [
     (
         "Evidence theory for the occupancy cells",
         "The one rule per cell (the mapper section, row 5) is crude: replace it with evidence for occupied and free.",
+    ),
+    (
+        "A lost robot counts as aligned for the arm",
+        "The pose is <code>unchecked</code> whenever the scan cannot be aligned at all, also when the map has walls "
+        "in view and the pose is ~0.5 m off (a lost robot): the arm then plans against a room placed in the wrong "
+        "spot (chart 4). Leave it unchecked only with too few walls in view or too few lidar returns, and ask the "
+        "lidar–camera match before the unchecked rule.",
+    ),
+    (
+        "Handle moving objects",
+        "Each plan uses the room as it was when planned; something that moves into the arm's path after it (a "
+        "person, a door, a cart) is not seen until the next plan.",
+    ),
+    (
+        "Check the timeouts against live use of arm awareness",
+        "The waits were set from billie-26's test runs (2026-10-29 to 11-16): moves up to 21.3 s, looks 14.6 s, "
+        "replays 8.44 s with at most 1 blocked stretch, solves that shorten moves near furniture 13.6 s, mapper "
+        "stalls 7.8 s. Once flows run with arm awareness in hotels, measure them again and tighten: "
+        "<code>PLAN_MOVE_TIMEOUT_S</code>, <code>PLAN_LOOK_TIMEOUT_S</code> and <code>PLAN_REPLAY_TIMEOUT_S</code> "
+        "(the move's) 30 → 20 s once the shared room build keeps moves well under 20 s and the 6 s room wait "
+        "(<code>SURROUNDINGS_TIMEOUT_S</code>) is seen to fire (on billie-26 the planner waited ~20 s for the room "
+        "without it); <code>SOLVE_TIMEOUT_S</code> 20 → 10 s once shortening is faster; "
+        "<code>MAPPER_STATUS_TIMEOUT_S</code> 15 s against the mapper's stalls. Watch for replays with several "
+        "blocked stretches in a cluttered room (the case the old 60 s replay wait was for). Log the room wait apart "
+        "from the planning time, so each can be read on its own.",
     ),
 ]
 
